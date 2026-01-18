@@ -154,7 +154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
 
             // 2. Call Gemini API
             $apiKey = GEMINI_API_KEY;
-            $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" . $apiKey;
+            $url = GEMINI_API_URL . "?key=" . $apiKey;
 
             $payload = [
                 "contents" => [
