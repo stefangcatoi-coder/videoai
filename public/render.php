@@ -52,10 +52,9 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 <body>
     <div class="loader"></div>
     <h2>Generăm Video-ul Final...</h2>
-    <p>Acest proces poate dura până la 1 minut. Te rugăm să nu închizi pagina.</p>
+    <p>Adăugăm subtitrări dinamice și procesăm imaginile. Te rugăm să aștepți.</p>
 
     <?php
-    // Flush the output to the browser so the user sees the loader
     if (ob_get_level()) ob_end_flush();
     flush();
 
@@ -64,66 +63,112 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     $img2 = __DIR__ . "/" . $video['image2'];
     $img3 = __DIR__ . "/" . $video['image3'];
     $audio = __DIR__ . "/" . $video['voiceover_path'];
+    $fontPath = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
 
-    // Verify files exist
     if (!file_exists($img1) || !file_exists($img2) || !file_exists($img3) || !file_exists($audio)) {
-        echo "<p style='color: red;'>Eroare: Unele fișiere media lipsesc de pe disc.</p>";
+        echo "<p style='color: red;'>Eroare: Unele fișiere media lipsesc.</p>";
         exit;
     }
 
-    // 3. Calculate Audio Duration
+    // 3. Timing Calculation
     $ffprobe_cmd = "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " . escapeshellarg($audio);
     $audio_duration = (float)shell_exec($ffprobe_cmd);
+    if (!$audio_duration || $audio_duration <= 0) $audio_duration = 20.0;
 
-    if (!$audio_duration || $audio_duration <= 0) {
-        $audio_duration = 30.0; // Fallback
+    $img_duration = $audio_duration / 3;
+
+    // 4. Subtitle Processing
+    function getPhrases($text) {
+        $words = explode(' ', $text);
+        $phrases = [];
+        $current = [];
+        foreach ($words as $word) {
+            $current[] = $word;
+            if (count($current) >= 4 || preg_match('/[.!?]$/', $word)) {
+                $phrases[] = trim(implode(' ', $current));
+                $current = [];
+            }
+        }
+        if (!empty($current)) $phrases[] = trim(implode(' ', $current));
+        return $phrases;
     }
 
-    // Calculăm durata fiecărei imagini în mod dinamic (3 imagini per video)
-    $img_duration = $audio_duration / 3;
-    $zoompan_d = round($img_duration * 25); // frames at 25fps (durata pentru zoompan)
+    $scriptText = $video['script'] ?? '';
+    $phrases = getPhrases($scriptText);
+    $numPhrases = count($phrases);
+    $phraseDuration = ($numPhrases > 0) ? $audio_duration / $numPhrases : 0;
+
+    // FFmpeg Text Escaping
+    function escapeFf($t) {
+        $t = str_replace(["\\", "'", ":"], ["\\\\", "'\\''", "\\:"], $t);
+        return $t;
+    }
+
+    // 5. Build Filter Complex
+    // Slideshow part
+    // Folosim scale=w=-1:h=1920,crop=1080:1920 conform specificațiilor
+    $filter = "[0:v]scale=w=-1:h=1920,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v1]; ";
+    $filter .= "[1:v]scale=w=-1:h=1920,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v2]; ";
+    $filter .= "[2:v]scale=w=-1:h=1920,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v3]; ";
+    $filter .= "[v1][v2][v3]concat=n=3:v=1:a=0[vbase]; ";
+
+    // Subtitles part
+    $lastLabel = "vbase";
+    for ($i = 0; $i < $numPhrases; $i++) {
+        $start = $i * $phraseDuration;
+        $end = ($i + 1) * $phraseDuration;
+        $nextLabel = "vsub" . $i;
+        $text = escapeFf($phrases[$i]);
+
+        // Current phrase (Yellow, Centered)
+        $filter .= "[$lastLabel]drawtext=fontfile='$fontPath':text='$text':fontcolor=yellow:fontsize=64:x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t,$start,$end)'";
+
+        // Previous phrase (White, Above)
+        if ($i > 0) {
+            $prevText = escapeFf($phrases[$i-1]);
+            $filter .= ",drawtext=fontfile='$fontPath':text='$prevText':fontcolor=white@0.4:fontsize=50:x=(w-text_w)/2:y=(h-text_h)/2-100:enable='between(t,$start,$end)'";
+        }
+
+        // Next phrase (White, Below)
+        if ($i < $numPhrases - 1) {
+            $nextText = escapeFf($phrases[$i+1]);
+            $filter .= ",drawtext=fontfile='$fontPath':text='$nextText':fontcolor=white@0.4:fontsize=50:x=(w-text_w)/2:y=(h-text_h)/2+100:enable='between(t,$start,$end)'";
+        }
+
+        $filter .= "[$nextLabel]; ";
+        $lastLabel = $nextLabel;
+    }
+
+    // Final output label
+    $finalV = substr($lastLabel, 0);
 
     $output_filename = "video_" . $video_id . "_" . time() . ".mp4";
     $output_path = __DIR__ . "/uploads/videos/" . $output_filename;
     $relative_video_path = "uploads/videos/" . $output_filename;
 
-    if (!is_dir(__DIR__ . "/uploads/videos/")) {
-        mkdir(__DIR__ . "/uploads/videos/", 0775, true);
-    }
+    if (!is_dir(__DIR__ . "/uploads/videos/")) mkdir(__DIR__ . "/uploads/videos/", 0775, true);
 
-    // 4. FFmpeg Command
-    // - Vertical 1080x1920
-    // - Scale and Crop to handle 800x450 inputs
-    // - Zoompan effect synchronized with audio
-    $ffmpeg = "ffmpeg";
-    
-    $ffmpeg_cmd = "$ffmpeg -y " .
-        "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img1) . " " .
-        "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img2) . " " .
-        "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img3) . " " .
+    $ffmpeg_cmd = "ffmpeg -y " .
+        "-loop 1 -t $img_duration -i " . escapeshellarg($img1) . " " .
+        "-loop 1 -t $img_duration -i " . escapeshellarg($img2) . " " .
+        "-loop 1 -t $img_duration -i " . escapeshellarg($img3) . " " .
         "-i " . escapeshellarg($audio) . " " .
-        "-filter_complex \"" .
-        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920,setsar=1[v1]; " .
-        "[1:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920,setsar=1[v2]; " .
-        "[2:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920,setsar=1[v3]; " .
-        "[v1][v2][v3]concat=n=3:v=1:a=0[v]\" " .
-        "-map \"[v]\" -map 3:a -c:v libx264 -pix_fmt yuv420p -preset medium -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path) . " 2>&1";
+        "-filter_complex \"$filter\" " .
+        "-map \"[$lastLabel]\" -map 3:a -c:v libx264 -pix_fmt yuv420p -preset faster -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path) . " 2>&1";
 
     exec($ffmpeg_cmd, $output, $return_var);
 
     if ($return_var !== 0) {
-        if (!is_dir(__DIR__ . '/../storage')) mkdir(__DIR__ . '/../storage', 0775, true);
         file_put_contents(__DIR__ . '/../storage/debug_ffmpeg.log', "CMD: $ffmpeg_cmd\n\nOUTPUT:\n" . implode("\n", $output));
-        echo "<p style='color: red;'>Eroare FFmpeg. Verifică storage/debug_ffmpeg.log pentru detalii.</p>";
+        echo "<p style='color: red;'>Eroare FFmpeg. Verifică storage/debug_ffmpeg.log.</p>";
         exit;
     }
 
-    // 5. Update Database
+    // 6. Update Database
     $stmt = $pdo->prepare("UPDATE videos SET status = 'done', video_path = ? WHERE id = ?");
     $stmt->execute([$relative_video_path, $video_id]);
 
-    // 6. Success - Redirect using JS since headers already sent
-    echo "<script>window.location.href = 'dashboard.php?success=Video-ul tău este gata! Îl poți vedea acum.';</script>";
+    echo "<script>window.location.href = 'dashboard.php?success=Video-ul cu subtitrări este gata!';</script>";
     ?>
 </body>
 </html>
