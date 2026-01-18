@@ -57,8 +57,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             }";
 
             // 2. Call Gemini API (Strictly following latest documentation)
-            $apiKey = GEMINI_API_KEY;
-            $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" . $apiKey;
+            $apiKey = trim(GEMINI_API_KEY);
+            $url = GEMINI_API_URL . "?key=" . $apiKey;
 
             $payload = [
                 "contents" => [
@@ -81,7 +81,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             curl_close($ch);
 
             if ($httpCode !== 200) {
-                throw new Exception("Eroare API Gemini (HTTP $httpCode). Verifică cheia API.");
+                // Log response for debugging if needed (could be 404, 400, etc.)
+                throw new Exception("Eroare API Gemini (HTTP $httpCode). Te rugăm să verifici dacă URL-ul și cheia API sunt corecte în config/gemini.php.");
             }
 
             $result = json_decode($response, true);
