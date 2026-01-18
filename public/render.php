@@ -59,14 +59,27 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     flush();
 
     // 2. Paths
-    $img1 = __DIR__ . "/" . $video['image1'];
-    $img2 = __DIR__ . "/" . $video['image2'];
-    $img3 = __DIR__ . "/" . $video['image3'];
-    $audio = __DIR__ . "/" . $video['voiceover_path'];
+    function getRealFfPath($path) {
+        if (empty($path)) return "";
+        if (strpos($path, "http") === 0) return $path;
+        return __DIR__ . "/" . $path;
+    }
+
+    $img1 = getRealFfPath($video['image1']);
+    $img2 = getRealFfPath($video['image2']);
+    $img3 = getRealFfPath($video['image3']);
+    $audio = getRealFfPath($video['voiceover_path']);
     $fontPath = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
 
-    if (!file_exists($img1) || !file_exists($img2) || !file_exists($img3) || !file_exists($audio)) {
-        echo "<p style='color: red;'>Eroare: Unele fișiere media lipsesc.</p>";
+    // Verificăm dacă fișierele locale există
+    $checkFile = function($p) {
+        if (empty($p)) return false;
+        if (strpos($p, "http") === 0) return true; // Presupunem că URL-ul e valid
+        return file_exists($p);
+    };
+
+    if (!$checkFile($img1) || !$checkFile($img2) || !$checkFile($img3) || !$checkFile($audio)) {
+        echo "<p style='color: red;'>Eroare: Unele fișiere media lipsesc (sau URL invalid).</p>";
         exit;
     }
 
@@ -98,9 +111,12 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     $numPhrases = count($phrases);
     $phraseDuration = ($numPhrases > 0) ? $audio_duration / $numPhrases : 0;
 
-    // FFmpeg Text Escaping
+    // FFmpeg Text Escaping for drawtext
     function escapeFf($t) {
-        $t = str_replace(["\\", "'", ":"], ["\\\\", "'\\''", "\\:"], $t);
+        // Escape backslash, then single quote, then colon, then percent (for time/metadata)
+        $t = str_replace("\\", "\\\\", $t);
+        $t = str_replace("'", "'\\''", $t);
+        $t = str_replace(":", "\\:", $t);
         return $t;
     }
 
@@ -114,33 +130,35 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 
     // Subtitles part
     $lastLabel = "vbase";
-    for ($i = 0; $i < $numPhrases; $i++) {
-        $start = $i * $phraseDuration;
-        $end = ($i + 1) * $phraseDuration;
-        $nextLabel = "vsub" . $i;
-        $text = escapeFf($phrases[$i]);
+    if ($numPhrases > 0) {
+        for ($i = 0; $i < $numPhrases; $i++) {
+            $start = $i * $phraseDuration;
+            $end = ($i + 1) * $phraseDuration;
+            $nextLabel = "vsub" . $i;
+            $text = escapeFf($phrases[$i]);
 
-        // Current phrase (Yellow, Centered)
-        $filter .= "[$lastLabel]drawtext=fontfile='$fontPath':text='$text':fontcolor=yellow:fontsize=64:x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t,$start,$end)'";
+            // Current phrase (Yellow, Centered)
+            $filter .= "[$lastLabel]drawtext=fontfile='$fontPath':text='$text':fontcolor=yellow:fontsize=64:x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t,$start,$end)'";
 
-        // Previous phrase (White, Above)
-        if ($i > 0) {
-            $prevText = escapeFf($phrases[$i-1]);
-            $filter .= ",drawtext=fontfile='$fontPath':text='$prevText':fontcolor=white@0.4:fontsize=50:x=(w-text_w)/2:y=(h-text_h)/2-100:enable='between(t,$start,$end)'";
+            // Previous phrase (White, Above)
+            if ($i > 0) {
+                $prevText = escapeFf($phrases[$i-1]);
+                $filter .= ",drawtext=fontfile='$fontPath':text='$prevText':fontcolor=white@0.4:fontsize=50:x=(w-text_w)/2:y=(h-text_h)/2-100:enable='between(t,$start,$end)'";
+            }
+
+            // Next phrase (White, Below)
+            if ($i < $numPhrases - 1) {
+                $nextText = escapeFf($phrases[$i+1]);
+                $filter .= ",drawtext=fontfile='$fontPath':text='$nextText':fontcolor=white@0.4:fontsize=50:x=(w-text_w)/2:y=(h-text_h)/2+100:enable='between(t,$start,$end)'";
+            }
+
+            $filter .= "[$nextLabel]; ";
+            $lastLabel = $nextLabel;
         }
-
-        // Next phrase (White, Below)
-        if ($i < $numPhrases - 1) {
-            $nextText = escapeFf($phrases[$i+1]);
-            $filter .= ",drawtext=fontfile='$fontPath':text='$nextText':fontcolor=white@0.4:fontsize=50:x=(w-text_w)/2:y=(h-text_h)/2+100:enable='between(t,$start,$end)'";
-        }
-
-        $filter .= "[$nextLabel]; ";
-        $lastLabel = $nextLabel;
     }
 
-    // Final output label
-    $finalV = substr($lastLabel, 0);
+    // Curățăm filtrul de ultimul punct și virgulă și spațiu pentru a evita eroarea FFmpeg
+    $filter = rtrim($filter, "; ");
 
     $output_filename = "video_" . $video_id . "_" . time() . ".mp4";
     $output_path = __DIR__ . "/uploads/videos/" . $output_filename;
