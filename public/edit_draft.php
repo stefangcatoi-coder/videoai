@@ -198,22 +198,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
         if (images[index]) return true;
 
         const card = document.getElementById('card-' + index);
-        card.innerHTML = '<div class="spinner-small"></div><div class="img-status">Se generează...</div>';
+        const updateStatus = (text) => {
+            card.innerHTML = `<div class="spinner-small"></div><div class="img-status">${text}</div>`;
+        };
 
         try {
-            const response = await fetch(`ajax_generate_image.php?video_id=${videoId}&index=${index}`);
-            const data = await response.json();
+            // Step 1: Initiate
+            updateStatus("Inițiere...");
+            const initRes = await fetch(`ajax_generate_image.php?action=initiate&video_id=${videoId}&index=${index}`);
+            const initData = await initRes.json();
 
-            if (data.success) {
-                card.innerHTML = `<img src="${data.path}">`;
-                images[index] = data.path;
+            if (!initData.success) throw new Error(initData.error || "Eroare la inițiere.");
+
+            let imgUrl = initData.imgUrl;
+            let requestId = initData.requestId;
+
+            // Step 2: Poll if needed
+            if (!imgUrl && requestId) {
+                let completed = false;
+                let attempts = 0;
+                while (!completed && attempts < 60) {
+                    attempts++;
+                    updateStatus(`Generare... (${attempts})`);
+                    await new Promise(r => setTimeout(r, 4000));
+
+                    const pollRes = await fetch(`ajax_generate_image.php?action=poll&requestId=${requestId}`);
+                    const pollData = await pollRes.json();
+
+                    if (!pollData.success) throw new Error(pollData.error || "Eroare la verificare.");
+
+                    if (pollData.completed) {
+                        imgUrl = pollData.imgUrl;
+                        completed = true;
+                    } else if (pollData.failed) {
+                        throw new Error("Generarea a eșuat la DeAPI.");
+                    }
+                }
+            }
+
+            if (!imgUrl) throw new Error("Timeout sau URL lipsă.");
+
+            // Step 3: Save
+            updateStatus("Salvare...");
+            const saveRes = await fetch(`ajax_generate_image.php?action=save&video_id=${videoId}&index=${index}&imgUrl=${encodeURIComponent(imgUrl)}`);
+            const saveData = await saveRes.json();
+
+            if (saveData.success) {
+                card.innerHTML = `<img src="${saveData.path}">`;
+                images[index] = saveData.path;
                 return true;
             } else {
-                card.innerHTML = `<div style="color:#ff5252; font-size:0.7rem; padding:10px;">Eroare: ${data.error}</div>`;
-                return false;
+                throw new Error(saveData.error || "Eroare la salvare.");
             }
+
         } catch (e) {
-            card.innerHTML = `<div style="color:#ff5252; font-size:0.7rem; padding:10px;">Eroare rețea</div>`;
+            console.error(e);
+            card.innerHTML = `<div style="color:#ff5252; font-size:0.7rem; padding:10px;">${e.message}</div>`;
             return false;
         }
     }
