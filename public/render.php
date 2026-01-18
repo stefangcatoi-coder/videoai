@@ -100,15 +100,23 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     $assFile = $tempDir . "subtitles.ass";
 
     // Run Whisper for word-level timestamps
-    $whisper_cmd = "whisper " . escapeshellarg($audio) . " --model base --language Romanian --word_timestamps True --output_format json --output_dir " . escapeshellarg($tempDir) . " 2>&1";
+    $whisper_bin = (shell_exec("which whisper") !== null) ? "whisper" : "/usr/local/bin/whisper";
+
+    // Check if bin exists, otherwise log it
+    if ($whisper_bin !== "whisper" && !file_exists($whisper_bin)) {
+        file_put_contents(__DIR__ . '/../storage/debug_whisper.log', "Error: Whisper binary not found. Please install it using 'pip install openai-whisper'.\n", FILE_APPEND);
+    }
+
+    $whisper_cmd = "$whisper_bin " . escapeshellarg($audio) . " --model base --language Romanian --word_timestamps True --output_format json --output_dir " . escapeshellarg($tempDir) . " 2>&1";
     exec($whisper_cmd, $w_out, $w_ret);
 
     function formatAssTime($seconds) {
         $h = floor($seconds / 3600);
-        $m = floor(($seconds % 3600) / 60);
-        $s = $seconds % 60;
-        $ms = ($seconds - floor($seconds)) * 100;
-        return sprintf("%d:%02d:%02d.%02d", $h, $m, $s, $ms);
+        $m = floor(($seconds / 60) % 60);
+        $s = floor($seconds % 60);
+        $cs = round(($seconds - floor($seconds)) * 100);
+        if ($cs >= 100) { $cs = 0; $s++; }
+        return sprintf("%d:%02d:%02d.%02d", $h, $m, $s, $cs);
     }
 
     if ($w_ret === 0 && file_exists($jsonOutput)) {
@@ -149,10 +157,10 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     }
 
     // 5. Build Filter Complex
-    // Slideshow part
-    $filter = "[0:v]scale=w=-1:h=1920,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v1]; ";
-    $filter .= "[1:v]scale=w=-1:h=1920,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v2]; ";
-    $filter .= "[2:v]scale=w=-1:h=1920,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v3]; ";
+    // Slideshow part - Optimized scaling to avoid "too big/small" errors
+    $filter = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v1]; ";
+    $filter .= "[1:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v2]; ";
+    $filter .= "[2:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v3]; ";
     $filter .= "[v1][v2][v3]concat=n=3:v=1:a=0[vbase]";
 
     if ($useAss) {
