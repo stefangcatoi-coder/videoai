@@ -90,79 +90,77 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 
     $img_duration = $audio_duration / 3;
 
-    // 4. Subtitle Processing
-    function getPhrases($text) {
-        // Curățăm textul de caractere care pot strica comanda shell sau filtrul FFmpeg
-        $text = str_replace(['"', "'", '„', '”', "\r", "\n"], ['', '', '', '', ' ', ' '], $text);
-        $words = preg_split('/\s+/', trim($text));
-        $phrases = [];
-        $current = [];
-        foreach ($words as $word) {
-            if (empty($word)) continue;
-            $current[] = $word;
-            // Grupează cuvintele în fraze de ~4 cuvinte sau la sfârșit de propoziție
-            if (count($current) >= 4 || preg_match('/[.!?]$/', $word)) {
-                $phrases[] = trim(implode(' ', $current));
-                $current = [];
-            }
-        }
-        if (!empty($current)) $phrases[] = trim(implode(' ', $current));
-        return $phrases;
+    // 4. Word-Level Subtitles with Whisper
+    $tempDir = __DIR__ . "/uploads/temp_" . $video_id . "_" . time() . "/";
+    if (!is_dir($tempDir)) mkdir($tempDir, 0775, true);
+
+    // Whisper creates a json file with the same name as audio but .json extension
+    $audioBasename = pathinfo($audio, PATHINFO_FILENAME);
+    $jsonOutput = $tempDir . $audioBasename . ".json";
+    $assFile = $tempDir . "subtitles.ass";
+
+    // Run Whisper for word-level timestamps
+    $whisper_cmd = "whisper " . escapeshellarg($audio) . " --model base --language Romanian --word_timestamps True --output_format json --output_dir " . escapeshellarg($tempDir) . " 2>&1";
+    exec($whisper_cmd, $w_out, $w_ret);
+
+    function formatAssTime($seconds) {
+        $h = floor($seconds / 3600);
+        $m = floor(($seconds % 3600) / 60);
+        $s = $seconds % 60;
+        $ms = ($seconds - floor($seconds)) * 100;
+        return sprintf("%d:%02d:%02d.%02d", $h, $m, $s, $ms);
     }
 
-    $scriptText = $video['script'] ?? '';
-    $phrases = getPhrases($scriptText);
-    $numPhrases = count($phrases);
-    $phraseDuration = ($numPhrases > 0) ? $audio_duration / $numPhrases : 0;
+    if ($w_ret === 0 && file_exists($jsonOutput)) {
+        $data = json_decode(file_get_contents($jsonOutput), true);
 
-    // FFmpeg Text Escaping for drawtext
-    function escapeFf($t) {
-        $t = str_replace("\\", "\\\\", $t);
-        $t = str_replace(":", "\\:", $t);
-        $t = str_replace("%", "\\%", $t);
-        // Deoarece am scos deja ghilimelele, aici e doar o măsură de siguranță suplimentară
-        return $t;
+        $assHeader = "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n";
+        $assHeader .= "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n";
+        $assHeader .= "Style: Default,Arial,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,5,10,10,10,1\n\n";
+        $assHeader .= "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
+
+        $events = "";
+        foreach ($data['segments'] as $segment) {
+            if (!isset($segment['words'])) continue;
+
+            $words = $segment['words'];
+            foreach ($words as $idx => $wordData) {
+                $start = formatAssTime($wordData['start']);
+                $end = formatAssTime($wordData['end']);
+
+                $lineText = "";
+                foreach ($words as $i => $w) {
+                    $cleanWord = trim($w['word']);
+                    if ($i === $idx) {
+                        $lineText .= "{\\1c&H00FFFF&}" . $cleanWord . "{\\1c&HFFFFFF&} ";
+                    } else {
+                        $lineText .= $cleanWord . " ";
+                    }
+                }
+                $events .= "Dialogue: 0,$start,$end,Default,,0,0,0,," . trim($lineText) . "\n";
+            }
+        }
+        file_put_contents($assFile, $assHeader . $events);
+        $useAss = true;
+    } else {
+        // Log Whisper Error and disable ASS
+        file_put_contents(__DIR__ . '/../storage/debug_whisper.log', " Whisper failed with code $w_ret: " . implode("\n", $w_out));
+        $useAss = false;
     }
 
     // 5. Build Filter Complex
     // Slideshow part
-    // Folosim scale=w=-1:h=1920,crop=1080:1920 conform specificațiilor
     $filter = "[0:v]scale=w=-1:h=1920,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v1]; ";
     $filter .= "[1:v]scale=w=-1:h=1920,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v2]; ";
     $filter .= "[2:v]scale=w=-1:h=1920,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v3]; ";
-    $filter .= "[v1][v2][v3]concat=n=3:v=1:a=0[vbase]; ";
+    $filter .= "[v1][v2][v3]concat=n=3:v=1:a=0[vbase]";
 
-    // Subtitles part
-    $lastLabel = "vbase";
-    if ($numPhrases > 0) {
-        for ($i = 0; $i < $numPhrases; $i++) {
-            $start = $i * $phraseDuration;
-            $end = ($i + 1) * $phraseDuration;
-            $nextLabel = "vsub" . $i;
-            $text = escapeFf($phrases[$i]);
-
-            // Current phrase (Yellow, Centered)
-            $filter .= "[$lastLabel]drawtext=fontfile='$fontPath':text='$text':fontcolor=yellow:fontsize=64:x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t,$start,$end)'";
-
-            // Previous phrase (White, Above)
-            if ($i > 0) {
-                $prevText = escapeFf($phrases[$i-1]);
-                $filter .= ",drawtext=fontfile='$fontPath':text='$prevText':fontcolor=white@0.4:fontsize=50:x=(w-text_w)/2:y=(h-text_h)/2-100:enable='between(t,$start,$end)'";
-            }
-
-            // Next phrase (White, Below)
-            if ($i < $numPhrases - 1) {
-                $nextText = escapeFf($phrases[$i+1]);
-                $filter .= ",drawtext=fontfile='$fontPath':text='$nextText':fontcolor=white@0.4:fontsize=50:x=(w-text_w)/2:y=(h-text_h)/2+100:enable='between(t,$start,$end)'";
-            }
-
-            $filter .= "[$nextLabel]; ";
-            $lastLabel = $nextLabel;
-        }
+    if ($useAss) {
+        $filter .= "; [vbase]subtitles=" . escapeshellarg($assFile) . ":fontsdir=" . escapeshellarg(dirname($fontPath)) . "[vfinal]";
+        $lastLabel = "vfinal";
+    } else {
+        $lastLabel = "vbase";
     }
-
-    // Curățăm filtrul de ultimul punct și virgulă și spațiu pentru a evita eroarea FFmpeg
-    $filter = rtrim($filter, "; ");
 
     $output_filename = "video_" . $video_id . "_" . time() . ".mp4";
     $output_path = __DIR__ . "/uploads/videos/" . $output_filename;
