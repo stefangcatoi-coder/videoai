@@ -277,7 +277,7 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
                     <tbody>
                         <?php foreach ($videos as $video): ?>
                             <tr>
-                                <td><strong><?php echo htmlspecialchars($video['title']); ?></strong></td>
+                                <td><a href="view.php?id=<?php echo $video['id']; ?>" style="color: #bb86fc; text-decoration: none;"><strong><?php echo htmlspecialchars($video['title']); ?></strong></a></td>
                                 <td><?php echo date('d.m.Y H:i', strtotime($video['created_at'])); ?></td>
                                 <td>
                                     <?php if ($video['status'] === 'pending'): ?>
