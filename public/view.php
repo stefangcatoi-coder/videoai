@@ -167,9 +167,9 @@ if ($video['status'] === 'draft') {
                     </div>
                 <?php elseif ($video['status'] === 'done'): ?>
                     <div class="status-msg" style="color: #03dac6;">Video-ul a fost generat cu succes!</div>
-                    <div class="video-container">
-                        <video width="100%" controls>
-                            <source src="https://www.w3schools.com/html/mov_bbb.mp4" type="video/mp4">
+                    <div class="video-container" style="aspect-ratio: 9/16; max-width: 400px; margin: 0 auto;">
+                        <video width="100%" height="100%" controls>
+                            <source src="<?php echo htmlspecialchars($video['video_path']); ?>" type="video/mp4">
                             Browser-ul tău nu suportă tag-ul video.
                         </video>
                     </div>

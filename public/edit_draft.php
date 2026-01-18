@@ -31,7 +31,18 @@ if (!$video || $video['status'] !== 'draft') {
 
 $error = '';
 
-// Handle Production Request (Speechify Integration)
+// Helper function to download images
+function downloadImage($url, $videoId, $index) {
+    $img_data = file_get_contents($url);
+    if ($img_data === false) return $url; // Fallback to URL if download fails
+
+    $filename = "img_" . $videoId . "_" . $index . "_" . time() . ".jpg";
+    $path = __DIR__ . "/uploads/images/" . $filename;
+    file_put_contents($path, $img_data);
+    return "uploads/images/" . $filename;
+}
+
+// Handle Production Request (Speechify Integration + Image Download)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
     $new_title = $_POST['title'] ?? $video['title'];
     $new_script = $_POST['script'] ?? $video['script'];
@@ -50,17 +61,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
             throw new Exception("Limită de video-uri atinsă. Te rugăm să faci upgrade pentru a genera acest video.");
         }
 
-        // 2. Save changes locally first
-        $stmt_update = $pdo->prepare("UPDATE videos SET title = ?, script = ?, description = ?, tags = ? WHERE id = ?");
-        $stmt_update->execute([$new_title, $new_script, $new_description, $new_tags, $video_id]);
+        // 2. Download Images to Disk
+        $localImg1 = downloadImage($video['image1'], $video_id, 1);
+        $localImg2 = downloadImage($video['image2'], $video_id, 2);
+        $localImg3 = downloadImage($video['image3'], $video_id, 3);
 
-        // 3. Call Speechify API for Voiceover
+        // 3. Save changes locally
+        $stmt_update = $pdo->prepare("UPDATE videos SET title = ?, script = ?, description = ?, tags = ?, image1 = ?, image2 = ?, image3 = ? WHERE id = ?");
+        $stmt_update->execute([$new_title, $new_script, $new_description, $new_tags, $localImg1, $localImg2, $localImg3, $video_id]);
+
+        // 4. Call Speechify API for Voiceover
         $apiKey = SPEECHIFY_API_KEY;
         $url = SPEECHIFY_API_URL;
 
         $payload = [
             "input" => $new_script,
-            "voice_id" => "george", // Speechify voice ID (e.g., george, simona, andrei)
+            "voice_id" => "george",
             "language" => "ro-RO",
             "audio_format" => "mp3",
             "model" => "simba-multilingual"
@@ -74,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
             "Content-Type: application/json"
         ]);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // For VPS compatibility
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         curl_setopt($ch, CURLOPT_TIMEOUT, 60);
 
         $response = curl_exec($ch);
@@ -82,8 +98,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
         curl_close($ch);
 
         if ($httpCode !== 200) {
-            // Log error for debugging
-            if (!is_dir(__DIR__ . '/../storage')) mkdir(__DIR__ . '/../storage', 0775, true);
             file_put_contents(__DIR__ . '/../storage/debug_speechify.log', "HTTP $httpCode: " . $response . "\n", FILE_APPEND);
             throw new Exception("Eroare Speechify API (HTTP $httpCode). Verifică storage/debug_speechify.log.");
         }
@@ -95,31 +109,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
             throw new Exception("Speechify nu a returnat date audio.");
         }
 
-        // 4. Save Audio File
+        // 5. Save Audio File
         $audio_content = base64_decode($audio_base64);
         $filename = "voiceover_" . $video_id . "_" . time() . ".mp3";
         $upload_dir = __DIR__ . "/uploads/audio/";
-
-        if (!is_dir($upload_dir)) {
-            mkdir($upload_dir, 0775, true);
-        }
-
         $file_path = $upload_dir . $filename;
         file_put_contents($file_path, $audio_content);
+        $relative_audio_path = "uploads/audio/" . $filename;
 
-        $relative_path = "uploads/audio/" . $filename;
+        // 6. Update Database Status to ready_for_render
+        $stmt_final = $pdo->prepare("UPDATE videos SET status = 'ready_for_render', voiceover_path = ? WHERE id = ?");
+        $stmt_final->execute([$relative_audio_path, $video_id]);
 
-        // 5. Update Database Status and Path
-        $stmt_final = $pdo->prepare("UPDATE videos SET status = 'processing', voiceover_path = ? WHERE id = ?");
-        $stmt_final->execute([$relative_path, $video_id]);
-
-        // 6. Increment usage
+        // 7. Increment usage
         $stmt_inc = $pdo->prepare("UPDATE users SET videos_used = videos_used + 1 WHERE id = ?");
         $stmt_inc->execute([$user_id]);
 
         $pdo->commit();
 
-        header("Location: dashboard.php?success=Video-ul tău este în procesare! Vocea a fost generată cu succes.");
+        // 8. Redirect to render.php
+        header("Location: render.php?id=" . $video_id);
         exit;
 
     } catch (Exception $e) {
@@ -335,13 +344,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
 
     <div id="loader" class="loader-overlay">
         <div class="spinner"></div>
-        <div class="loader-text">Speechify generează vocea...<br><small style="color: var(--text-dim);">Te rugăm să nu închizi fereastra.</small></div>
+        <div class="loader-text">Generăm Vocea și Pregătim Producția...<br><small style="color: var(--text-dim);">Te rugăm să nu închizi fereastra.</small></div>
     </div>
 
     <div class="main-content">
         <div class="container">
             <h1>Studio Creație Video</h1>
-            <p class="subtitle">Personalizează scriptul și generează vocea AI cu Speechify.</p>
+            <p class="subtitle">Personalizează scriptul și pregătește video-ul final.</p>
 
             <?php if ($error): ?>
                 <div class="error"><?php echo htmlspecialchars($error); ?></div>
@@ -384,7 +393,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
                         </div>
                     </div>
 
-                    <button type="submit" name="produce" class="btn-produce">GENEREAZĂ VIDEO FINAL (SPEECHIFY)</button>
+                    <button type="submit" name="produce" class="btn-produce">GENEREAZĂ VIDEO FINAL</button>
                 </div>
             </form>
         </div>
