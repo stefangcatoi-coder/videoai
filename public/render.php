@@ -92,11 +92,15 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 
     // 4. Subtitle Processing
     function getPhrases($text) {
-        $words = explode(' ', $text);
+        // Curățăm textul de caractere care pot strica comanda shell sau filtrul FFmpeg
+        $text = str_replace(['"', "'", '„', '”', "\r", "\n"], ['', '', '', '', ' ', ' '], $text);
+        $words = preg_split('/\s+/', trim($text));
         $phrases = [];
         $current = [];
         foreach ($words as $word) {
+            if (empty($word)) continue;
             $current[] = $word;
+            // Grupează cuvintele în fraze de ~4 cuvinte sau la sfârșit de propoziție
             if (count($current) >= 4 || preg_match('/[.!?]$/', $word)) {
                 $phrases[] = trim(implode(' ', $current));
                 $current = [];
@@ -113,10 +117,10 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 
     // FFmpeg Text Escaping for drawtext
     function escapeFf($t) {
-        // Escape backslash, then single quote, then colon, then percent (for time/metadata)
         $t = str_replace("\\", "\\\\", $t);
-        $t = str_replace("'", "'\\''", $t);
         $t = str_replace(":", "\\:", $t);
+        $t = str_replace("%", "\\%", $t);
+        // Deoarece am scos deja ghilimelele, aici e doar o măsură de siguranță suplimentară
         return $t;
     }
 
@@ -171,7 +175,7 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         "-loop 1 -t $img_duration -i " . escapeshellarg($img2) . " " .
         "-loop 1 -t $img_duration -i " . escapeshellarg($img3) . " " .
         "-i " . escapeshellarg($audio) . " " .
-        "-filter_complex \"$filter\" " .
+        "-filter_complex " . escapeshellarg($filter) . " " .
         "-map \"[$lastLabel]\" -map 3:a -c:v libx264 -pix_fmt yuv420p -preset faster -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path) . " 2>&1";
 
     exec($ffmpeg_cmd, $output, $return_var);
