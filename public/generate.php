@@ -34,107 +34,6 @@ if (!$user) {
 
 $can_generate = ($user['videos_used'] < $user['monthly_limit']);
 
-// Helper function to generate and download image via DeAPI.ai
-function generateAndDownloadImage($prompt, $videoId, $index) {
-    $apiKey = trim(DEAPI_API_KEY);
-    $url = DEAPI_API_URL;
-
-    $payload = [
-        "prompt" => $prompt,
-        "model" => "Flux1schnell",
-        "width" => 1080,
-        "height" => 1920,
-        "seed" => rand(1, 99999999),
-        "steps" => 4
-    ];
-
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        "Authorization: Bearer $apiKey",
-        "Content-Type: application/json"
-    ]);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($httpCode !== 200) {
-        file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "HTTP $httpCode (Initiate): " . $response . "\n", FILE_APPEND);
-        throw new Exception("Eroare DeAPI (HTTP $httpCode). Verifică storage/debug_deapi.log.");
-    }
-
-    $result = json_decode($response, true);
-    // Log successful response for debugging if it doesn't meet criteria
-    $requestId = $result['request_id'] ?? $result['id'] ?? $result['data']['id'] ?? $result['data']['request_id'] ?? $result['task_id'] ?? null;
-
-    if (!$requestId) {
-        $imgUrl = $result['data'][0]['url'] ?? $result['url'] ?? $result['output'][0] ?? $result['data']['url'] ?? '';
-        if (empty($imgUrl)) {
-            file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "HTTP 200 (Invalid Format): " . $response . "\n", FILE_APPEND);
-            throw new Exception("DeAPI nu a returnat un request_id sau un URL valid. Verifică storage/debug_deapi.log.");
-        }
-    } else {
-        // Polling for the asynchronous result
-        $statusUrl = DEAPI_STATUS_URL . $requestId;
-        $maxAttempts = 40;
-        $attempts = 0;
-        $imgUrl = '';
-
-        while ($attempts < $maxAttempts) {
-            sleep(3);
-            $attempts++;
-
-            $ch = curl_init($statusUrl);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Bearer $apiKey"]);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 15);
-
-            $statusRes = curl_exec($ch);
-            $statusHttp = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-
-            if ($statusHttp === 200) {
-                $statusData = json_decode($statusRes, true);
-                $status = $statusData['status'] ?? '';
-
-                if ($status === 'completed' || $status === 'succeeded' || isset($statusData['output']) || isset($statusData['url']) || isset($statusData['data']['url'])) {
-                     $imgUrl = $statusData['output'][0] ?? $statusData['url'] ?? ($statusData['data'][0]['url'] ?? $statusData['data']['url'] ?? '');
-                     if ($imgUrl) break;
-                } elseif ($status === 'failed') {
-                    file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "Status Failed: " . $statusRes . "\n", FILE_APPEND);
-                    throw new Exception("Generarea imaginii a eșuat la DeAPI.");
-                }
-            }
-        }
-    }
-
-    if (empty($imgUrl)) {
-        throw new Exception("Timeout sau eroare la obținerea URL-ului imaginii de la DeAPI.");
-    }
-
-    // Download local
-    $imgData = @file_get_contents($imgUrl);
-    if ($imgData === false) {
-        throw new Exception("Nu am putut descărca imaginea de la URL: " . $imgUrl);
-    }
-
-    $filename = "img_" . $videoId . "_" . $index . "_" . time() . ".jpg";
-    $relative_path = "uploads/images/" . $filename;
-    $absolute_path = __DIR__ . "/" . $relative_path;
-    
-    $dir = dirname($absolute_path);
-    if (!is_dir($dir)) mkdir($dir, 0775, true);
-    
-    file_put_contents($absolute_path, $imgData);
-    
-    return $relative_path;
-}
 
 // Processing Form Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
@@ -203,27 +102,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                 // 3. Save to Database (Initial Draft)
                 $pdo->beginTransaction();
 
-                $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags) VALUES (?, ?, 'draft', ?, ?, ?)");
+                $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags, prompt1, prompt2, prompt3) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)");
                 $stmt->execute([
                     $user_id,
                     $aiData['title'] ?? $idea,
                     $aiData['script'] ?? '',
                     $aiData['description'] ?? '',
-                    $aiData['tags'] ?? ''
+                    $aiData['tags'] ?? '',
+                    $aiData['image_prompts'][0] ?? '',
+                    $aiData['image_prompts'][1] ?? '',
+                    $aiData['image_prompts'][2] ?? ''
                 ]);
 
                 $video_id = $pdo->lastInsertId();
-
-                // 4. Generate and Save Images
-                $prompts = $aiData['image_prompts'] ?? ["Image related to $idea", "Another scene for $idea", "Final scene for $idea"];
-                $localImg1 = generateAndDownloadImage($prompts[0], $video_id, 1);
-                $localImg2 = generateAndDownloadImage($prompts[1], $video_id, 2);
-                $localImg3 = generateAndDownloadImage($prompts[2], $video_id, 3);
-
-                // Update with image paths
-                $stmt_upd = $pdo->prepare("UPDATE videos SET image1 = ?, image2 = ?, image3 = ? WHERE id = ?");
-                $stmt_upd->execute([$localImg1, $localImg2, $localImg3, $video_id]);
-
                 $pdo->commit();
 
                 header("Location: edit_draft.php?id=" . $video_id);
@@ -285,7 +176,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
     </div>
     <div id="loading" class="loading-overlay">
         <div class="spinner"></div>
-        <p>Gemini și DeAPI lucrează... Te rugăm să aștepți (aprox. 1-2 minute).</p>
+        <p>Gemini lucrează la planul tău... Te rugăm să aștepți.</p>
     </div>
     <script>
         document.getElementById('genForm').addEventListener('submit', function() {

@@ -145,10 +145,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
         input[type="text"], textarea { width: 100%; padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--input-bg); color: #fff; box-sizing: border-box; }
         textarea { min-height: 100px; }
         .images-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 1rem; }
+        .image-card { position: relative; min-height: 150px; background: #222; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
         .image-card img { width: 100%; border-radius: 8px; border: 1px solid var(--border-color); }
+        .img-status { position: absolute; bottom: 5px; right: 5px; background: rgba(0,0,0,0.7); padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; color: #fff; }
         .btn-produce { width: 100%; padding: 1rem; border: none; border-radius: 12px; background: linear-gradient(90deg, #00b09b, #96c93d); color: #121212; font-weight: 800; cursor: pointer; margin-top: 2rem; }
+        .btn-produce:disabled { background: #555; cursor: not-allowed; opacity: 0.6; }
         .loader-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; }
         .spinner { width: 50px; height: 50px; border: 5px solid rgba(255,255,255,0.1); border-top: 5px solid var(--accent-turquoise); border-radius: 50%; animation: spin 1s linear infinite; }
+        .spinner-small { width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid var(--accent-turquoise); border-radius: 50%; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
@@ -167,14 +171,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
                     <div class="form-group"><label>Etichete</label><input type="text" name="tags" value="<?php echo htmlspecialchars($video['tags']); ?>"></div>
                     <label>Imagini Generate (DeAPI)</label>
                     <div class="images-grid">
-                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image1']); ?>"></div>
-                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image2']); ?>"></div>
-                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image3']); ?>"></div>
+                        <div class="image-card" id="card-1">
+                            <?php if ($video['image1']): ?><img src="<?php echo htmlspecialchars($video['image1']); ?>"><?php else: ?><div class="spinner-small"></div><div class="img-status">Se generează...</div><?php endif; ?>
+                        </div>
+                        <div class="image-card" id="card-2">
+                            <?php if ($video['image2']): ?><img src="<?php echo htmlspecialchars($video['image2']); ?>"><?php else: ?><div class="spinner-small"></div><div class="img-status">Așteaptă...</div><?php endif; ?>
+                        </div>
+                        <div class="image-card" id="card-3">
+                            <?php if ($video['image3']): ?><img src="<?php echo htmlspecialchars($video['image3']); ?>"><?php else: ?><div class="spinner-small"></div><div class="img-status">Așteaptă...</div><?php endif; ?>
+                        </div>
                     </div>
-                    <button type="submit" name="produce" class="btn-produce">GENEREAZĂ VIDEO FINAL</button>
+                    <button type="submit" name="produce" id="btnProduce" class="btn-produce" <?php echo ($video['image1'] && $video['image2'] && $video['image3']) ? '' : 'disabled'; ?>>GENEREAZĂ VIDEO FINAL</button>
                 </div>
             </form>
         </div>
     </div>
+    <script>
+    const videoId = <?php echo (int)$video_id; ?>;
+    const images = {
+        1: "<?php echo $video['image1']; ?>",
+        2: "<?php echo $video['image2']; ?>",
+        3: "<?php echo $video['image3']; ?>"
+    };
+
+    async function generateImage(index) {
+        if (images[index]) return true;
+
+        const card = document.getElementById('card-' + index);
+        card.innerHTML = '<div class="spinner-small"></div><div class="img-status">Se generează...</div>';
+
+        try {
+            const response = await fetch(`ajax_generate_image.php?video_id=${videoId}&index=${index}`);
+            const data = await response.json();
+
+            if (data.success) {
+                card.innerHTML = `<img src="${data.path}">`;
+                images[index] = data.path;
+                return true;
+            } else {
+                card.innerHTML = `<div style="color:#ff5252; font-size:0.7rem; padding:10px;">Eroare: ${data.error}</div>`;
+                return false;
+            }
+        } catch (e) {
+            card.innerHTML = `<div style="color:#ff5252; font-size:0.7rem; padding:10px;">Eroare rețea</div>`;
+            return false;
+        }
+    }
+
+    async function processImages() {
+        const res1 = await generateImage(1);
+        const res2 = await generateImage(2);
+        const res3 = await generateImage(3);
+
+        if (images[1] && images[2] && images[3]) {
+            document.getElementById('btnProduce').disabled = false;
+        }
+    }
+
+    window.onload = () => {
+        if (!images[1] || !images[2] || !images[3]) {
+            processImages();
+        }
+    };
+    </script>
 </body>
 </html>
