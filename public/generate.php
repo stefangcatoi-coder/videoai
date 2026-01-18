@@ -14,6 +14,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../config/gemini.php';
 
 $user_id = $_SESSION['user_id'];
 $error = '';
@@ -37,43 +38,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
 
     if (!empty($idea)) {
         try {
+            // 1. Prepare Prompt for Gemini
+            $prompt = "Generează un plan detaliat pentru un video pornind de la ideea: \"$idea\".
+            Răspunsul tău TREBUIE să fie un obiect JSON valid, strict în limba română (cu excepția tag-urilor dacă e cazul), cu următoarele câmpuri:
+            - title: Un titlu captivant.
+            - script: Un text de aproximativ 60 de cuvinte care va fi folosit ca voce de fundal.
+            - description: O descriere scurtă pentru YouTube/Social Media.
+            - tags: O listă de cuvinte cheie separate prin virgulă.
+            - image_prompts: Un array cu exact 3 descrieri vizuale (în engleză) pentru un generator de imagini AI, care să ilustreze scriptul.
+
+            Returnează DOAR codul JSON, fără alte explicații.";
+
+            // 2. Call Gemini API
+            $apiKey = GEMINI_API_KEY;
+            $url = GEMINI_API_URL . "?key=" . $apiKey;
+
+            $payload = [
+                "contents" => [
+                    [
+                        "parts" => [
+                            ["text" => $prompt]
+                        ]
+                    ]
+                ],
+                "generationConfig" => [
+                    "responseMimeType" => "application/json"
+                ]
+            ];
+
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode !== 200) {
+                throw new Exception("Eroare API Gemini (HTTP $httpCode). Verifică cheia API în config/gemini.php.");
+            }
+
+            $result = json_decode($response, true);
+            $aiResponseText = $result['candidates'][0]['content']['parts'][0]['text'] ?? '';
+            $aiData = json_decode($aiResponseText, true);
+
+            if (!$aiData) {
+                throw new Exception("AI-ul nu a returnat un format JSON valid.");
+            }
+
+            // 3. Save to Database
             $pdo->beginTransaction();
 
-            // Insert new video as a Draft with placeholders
             $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags, image1, image2, image3) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)");
 
-            $placeholder_script = "Acesta este un script generat automat pentru: " . $idea;
-            $placeholder_desc = "Descriere generată pentru: " . $idea;
-            $placeholder_tags = "video, ai, " . strtolower(str_replace(' ', ', ', $idea));
-            $img1 = "https://placehold.co/600x400?text=Imagine+1";
-            $img2 = "https://placehold.co/600x400?text=Imagine+2";
-            $img3 = "https://placehold.co/600x400?text=Imagine+3";
+            $title = $aiData['title'] ?? $idea;
+            $script = $aiData['script'] ?? '';
+            $description = $aiData['description'] ?? '';
+            $tags = $aiData['tags'] ?? '';
+
+            // Placeholder images as requested
+            $img1 = "https://picsum.photos/800/450?random=" . rand(1, 1000);
+            $img2 = "https://picsum.photos/800/450?random=" . rand(1, 1000);
+            $img3 = "https://picsum.photos/800/450?random=" . rand(1, 1000);
 
             $stmt->execute([
                 $user_id,
-                $idea,
-                $placeholder_script,
-                $placeholder_desc,
-                $placeholder_tags,
+                $title,
+                $script,
+                $description,
+                $tags,
                 $img1,
                 $img2,
                 $img3
             ]);
 
             $video_id = $pdo->lastInsertId();
-
-            // We don't increment videos_used yet, only when they confirm the final generation?
-            // Actually, usually draft creation doesn't consume credits, but the user didn't specify.
-            // In the previous flow, generation incremented it.
-            // I'll leave it for the "Confirm" step in edit_draft.php to be more user-friendly.
-
             $pdo->commit();
 
             header("Location: edit_draft.php?id=" . $video_id);
             exit;
+
         } catch (Exception $e) {
-            $pdo->rollBack();
-            $error = "A apărut o eroare la salvare: " . $e->getMessage();
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $error = $e->getMessage();
         }
     } else {
         $error = "Vă rugăm să introduceți ideea video-ului.";
@@ -85,7 +134,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Planifică Video - Video AI</title>
+    <title>Generează Video - Video AI</title>
     <style>
         body {
             background-color: #121212;
@@ -132,7 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             color: #bb86fc;
         }
 
-        input, textarea {
+        input {
             width: 100%;
             padding: 0.75rem;
             border-radius: 4px;
@@ -173,6 +222,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             margin-bottom: 1.5rem;
             text-align: center;
         }
+
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+
+        .spinner {
+            border: 4px solid #333;
+            border-top: 4px solid #03dac6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
@@ -194,16 +269,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                         <div class="error"><?php echo htmlspecialchars($error); ?></div>
                     <?php endif; ?>
 
-                    <form method="POST">
+                    <form method="POST" id="genForm">
                         <div class="form-group">
                             <label for="idea">Ideea Video-ului</label>
                             <input type="text" name="idea" id="idea" placeholder="Ex: Cum să gătești paste" required>
                         </div>
-                        <button type="submit" class="btn-generate">Planifică Video</button>
+                        <button type="submit" class="btn-generate">Generează Plan (Gemini AI)</button>
                     </form>
                 </div>
             <?php endif; ?>
         </div>
     </div>
+
+    <div id="loading" class="loading-overlay">
+        <div class="spinner"></div>
+        <p>Gemini AI gândește... Te rugăm să aștepți.</p>
+    </div>
+
+    <script>
+        document.getElementById('genForm').addEventListener('submit', function() {
+            document.getElementById('loading').style.display = 'flex';
+        });
+    </script>
 </body>
 </html>
