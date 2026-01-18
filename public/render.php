@@ -64,6 +64,17 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         exit;
     }
 
+    // 3. Calculate Audio Duration
+    $ffprobe_cmd = "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " . escapeshellarg($audio);
+    $audio_duration = (float)shell_exec($ffprobe_cmd);
+
+    if (!$audio_duration) {
+        $audio_duration = 30.0; // Fallback
+    }
+
+    $img_duration = $audio_duration / 3;
+    $zoompan_d = round($img_duration * 25); // frames at 25fps
+
     $output_filename = "video_" . $video_id . "_" . time() . ".mp4";
     $output_path = __DIR__ . "/uploads/videos/" . $output_filename;
     $relative_video_path = "uploads/videos/" . $output_filename;
@@ -72,19 +83,21 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         mkdir(__DIR__ . "/uploads/videos/", 0775, true);
     }
 
-    // 3. FFmpeg Command
-    // We try to find ffmpeg in common paths if it's not in PATH
+    // 4. FFmpeg Command
+    // - Vertical 1080x1920
+    // - Scale and Crop to handle 800x450 inputs
+    // - Zoompan effect synchronized with audio
     $ffmpeg = "ffmpeg";
 
     $ffmpeg_cmd = "$ffmpeg -y " .
-        "-loop 1 -t 10 -i " . escapeshellarg($img1) . " " .
-        "-loop 1 -t 10 -i " . escapeshellarg($img2) . " " .
-        "-loop 1 -t 10 -i " . escapeshellarg($img3) . " " .
+        "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img1) . " " .
+        "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img2) . " " .
+        "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img3) . " " .
         "-i " . escapeshellarg($audio) . " " .
         "-filter_complex \"" .
-        "[0:v]scale=w=1920:h=-1,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=250:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v1]; " .
-        "[1:v]scale=w=1920:h=-1,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=250:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v2]; " .
-        "[2:v]scale=w=1920:h=-1,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=250:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v3]; " .
+        "[0:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v1]; " .
+        "[1:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v2]; " .
+        "[2:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v3]; " .
         "[v1][v2][v3]concat=n=3:v=1:a=0[v]\" " .
         "-map \"[v]\" -map 3:a -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path) . " 2>&1";
 
@@ -97,11 +110,11 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         exit;
     }
 
-    // 4. Update Database
+    // 5. Update Database
     $stmt = $pdo->prepare("UPDATE videos SET status = 'done', video_path = ? WHERE id = ?");
     $stmt->execute([$relative_video_path, $video_id]);
 
-    // 5. Success - Redirect using JS since headers already sent
+    // 6. Success - Redirect using JS since headers already sent
     echo "<script>window.location.href = 'dashboard.php?success=Video-ul tău este gata! Îl poți vedea acum.';</script>";
     ?>
 </body>
