@@ -189,11 +189,17 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
     <div class="sidebar">
         <h2>Video AI</h2>
         <a href="dashboard.php" class="nav-link active">Dashboard</a>
-        <a href="#" class="nav-link">Creează Video</a>
+        <a href="generate.php" class="nav-link">Creează Video</a>
         <a href="logout.php" class="nav-link logout-link">Logout</a>
     </div>
 
     <div class="main-content">
+        <?php if (isset($_GET['success'])): ?>
+            <div style="background-color: rgba(3, 218, 198, 0.1); color: #03dac6; padding: 1rem; border-radius: 4px; margin-bottom: 2rem; border: 1px solid #03dac6; text-align: center;">
+                <?php echo htmlspecialchars($_GET['success']); ?>
+            </div>
+        <?php endif; ?>
+
         <div class="header">
             <h1>Dashboard</h1>
             <div class="user-info">
@@ -213,7 +219,7 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
                 <a href="#" class="btn-create btn-disabled">Creează Video</a>
                 <span class="upgrade-msg">Ai atins limita. Upgrade Plan pentru a continua.</span>
             <?php else: ?>
-                <a href="#" class="btn-create btn-green">Creează Video</a>
+                <a href="generate.php" class="btn-create btn-green">Creează Video</a>
             <?php endif; ?>
         </div>
 
