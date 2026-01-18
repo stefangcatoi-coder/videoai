@@ -39,15 +39,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
     if (!empty($idea)) {
         try {
             // 1. Prepare Prompt for Gemini
-            $prompt = "Generează un plan detaliat pentru un video pornind de la ideea: \"$idea\".
-            Răspunsul tău TREBUIE să fie un obiect JSON valid, strict în limba română (cu excepția tag-urilor dacă e cazul), cu următoarele câmpuri:
-            - title: Un titlu captivant.
-            - script: Un text de aproximativ 60 de cuvinte care va fi folosit ca voce de fundal.
-            - description: O descriere scurtă pentru YouTube/Social Media.
-            - tags: O listă de cuvinte cheie separate prin virgulă.
-            - image_prompts: Un array cu exact 3 descrieri vizuale (în engleză) pentru un generator de imagini AI, care să ilustreze scriptul.
+            $prompt = "Generează un plan video pentru ideea: \"$idea\".
+            Răspunsul tău TREBUIE să fie un obiect JSON pur, fără marcaje markdown sau alte explicații, strict în limba română (cu excepția tag-urilor și a image_prompts dacă e cazul), cu următoarele câmpuri:
+            - title: Un titlu atractiv.
+            - script: Un text de exact 50-60 de cuvinte (pentru aproximativ 30 secunde de voce).
+            - description: O descriere pentru social media.
+            - tags: O listă cu 5 etichete relevante separate prin virgulă.
+            - image_prompts: Un array cu 3 descrieri vizuale scurte (în engleză) pentru un generator de imagini AI.
 
-            Returnează DOAR codul JSON, fără alte explicații.";
+            Exemplu format cerut:
+            {
+              \"title\": \"Titlu\",
+              \"script\": \"Textul scriptului aici...\",
+              \"description\": \"Descriere aici...\",
+              \"tags\": \"tag1, tag2, tag3, tag4, tag5\",
+              \"image_prompts\": [\"prompt 1\", \"prompt 2\", \"prompt 3\"]
+            }";
 
             // 2. Call Gemini API
             $apiKey = GEMINI_API_KEY;
@@ -77,15 +84,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             curl_close($ch);
 
             if ($httpCode !== 200) {
-                throw new Exception("Eroare API Gemini (HTTP $httpCode). Verifică cheia API în config/gemini.php.");
+                throw new Exception("Eroare API Gemini (HTTP $httpCode). Verifică cheia API.");
             }
 
             $result = json_decode($response, true);
             $aiResponseText = $result['candidates'][0]['content']['parts'][0]['text'] ?? '';
+
+            // Try to extract JSON if it's wrapped in markdown by mistake (though responseMimeType should prevent it)
+            if (preg_match('/\{.*\}/s', $aiResponseText, $matches)) {
+                $aiResponseText = $matches[0];
+            }
+
             $aiData = json_decode($aiResponseText, true);
 
-            if (!$aiData) {
-                throw new Exception("AI-ul nu a returnat un format JSON valid.");
+            if (!$aiData || !isset($aiData['script'])) {
+                throw new Exception("AI-ul nu a returnat un format JSON valid sau datele lipsesc.");
             }
 
             // 3. Save to Database
@@ -98,10 +111,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             $description = $aiData['description'] ?? '';
             $tags = $aiData['tags'] ?? '';
 
-            // Placeholder images as requested
-            $img1 = "https://picsum.photos/800/450?random=" . rand(1, 1000);
-            $img2 = "https://picsum.photos/800/450?random=" . rand(1, 1000);
-            $img3 = "https://picsum.photos/800/450?random=" . rand(1, 1000);
+            // Random images from picsum.photos as requested
+            $r1 = rand(1, 10000);
+            $r2 = rand(1, 10000);
+            $r3 = rand(1, 10000);
+            $img1 = "https://picsum.photos/800/450?random=" . $r1;
+            $img2 = "https://picsum.photos/800/450?random=" . $r2;
+            $img3 = "https://picsum.photos/800/450?random=" . $r3;
 
             $stmt->execute([
                 $user_id,
@@ -144,7 +160,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             display: flex;
         }
 
-        /* Main Content */
         .main-content {
             margin-left: 250px;
             padding: 2rem;
