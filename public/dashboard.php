@@ -121,6 +121,10 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
             color: #121212;
         }
 
+        .btn-green:hover {
+            background-color: #01b0a1;
+        }
+
         .btn-disabled {
             background-color: #555;
             color: #888;
@@ -183,6 +187,35 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
             padding: 3rem;
             color: #888;
         }
+
+        /* Status Labels */
+        .status-badge {
+            padding: 0.25rem 0.6rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .status-pending {
+            background-color: rgba(255, 152, 0, 0.2);
+            color: #ff9800;
+            border: 1px solid #ff9800;
+        }
+
+        .status-done {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: #4caf50;
+            border: 1px solid #4caf50;
+        }
+
+        .ai-working {
+            display: block;
+            font-size: 0.7rem;
+            margin-top: 4px;
+            font-style: italic;
+            opacity: 0.8;
+        }
     </style>
 </head>
 <body>
@@ -202,9 +235,14 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
 
         <div class="header">
             <h1>Dashboard</h1>
-            <div class="user-info">
-                <strong><?php echo htmlspecialchars($user['email']); ?></strong><br>
-                <span>Plan: <?php echo htmlspecialchars($user['plan']); ?></span>
+            <div style="display: flex; align-items: center; gap: 1.5rem;">
+                <?php if (!$limit_reached): ?>
+                    <a href="generate.php" class="btn-create btn-green">+ Video Nou</a>
+                <?php endif; ?>
+                <div class="user-info">
+                    <strong><?php echo htmlspecialchars($user['email']); ?></strong><br>
+                    <span>Plan: <?php echo htmlspecialchars($user['plan']); ?></span>
+                </div>
             </div>
         </div>
 
@@ -232,16 +270,25 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
                     <thead>
                         <tr>
                             <th>Titlu</th>
-                            <th>Status</th>
                             <th>Creat la</th>
+                            <th>Status</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php foreach ($videos as $video): ?>
                             <tr>
-                                <td><?php echo htmlspecialchars($video['title']); ?></td>
-                                <td><?php echo htmlspecialchars($video['status']); ?></td>
-                                <td><?php echo htmlspecialchars($video['created_at']); ?></td>
+                                <td><strong><?php echo htmlspecialchars($video['title']); ?></strong></td>
+                                <td><?php echo date('d.m.Y H:i', strtotime($video['created_at'])); ?></td>
+                                <td>
+                                    <?php if ($video['status'] === 'pending'): ?>
+                                        <span class="status-badge status-pending">În așteptare</span>
+                                        <span class="ai-working">AI-ul lucrează...</span>
+                                    <?php elseif ($video['status'] === 'done'): ?>
+                                        <span class="status-badge status-done">Finalizat</span>
+                                    <?php else: ?>
+                                        <span class="status-badge"><?php echo htmlspecialchars($video['status']); ?></span>
+                                    <?php endif; ?>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
