@@ -1,4 +1,8 @@
 <?php
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
 // /var/www/video-ai/public/login.php
 
 session_start();
@@ -11,11 +15,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $password = $_POST['password'] ?? '';
 
     if (!empty($email) && !empty($password)) {
-        $stmt = $pdo->prepare("SELECT id, password FROM users WHERE email = ?");
+        // Using password_hash column
+        $stmt = $pdo->prepare("SELECT id, password_hash FROM users WHERE email = ?");
         $stmt->execute([$email]);
         $user = $stmt->fetch();
 
-        if ($user && password_verify($password, $user['password'])) {
+        // Verify password with password_hash column from DB
+        if ($user && password_verify($password, $user['password_hash'])) {
             $_SESSION['user_id'] = $user['id'];
             header("Location: dashboard.php");
             exit;

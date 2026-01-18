@@ -1,4 +1,8 @@
 <?php
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
 // /var/www/video-ai/public/register.php
 
 require_once __DIR__ . '/../config/database.php';
@@ -17,9 +21,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($stmt->fetch()) {
             $error = "Email-ul este deja înregistrat.";
         } else {
-            // Hash password and insert
+            // Hash password and insert using password_hash column
             $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
-            $stmt = $pdo->prepare("INSERT INTO users (email, password) VALUES (?, ?)");
+            $stmt = $pdo->prepare("INSERT INTO users (email, password_hash) VALUES (?, ?)");
             if ($stmt->execute([$email, $hashedPassword])) {
                 header("Location: login.php");
                 exit;
