@@ -29,35 +29,42 @@ if (!$video || $video['status'] !== 'draft') {
 }
 
 $error = '';
+$success_msg = '';
 
-// Handle Confirmation
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm'])) {
+// Handle Production Request
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
+    $new_title = $_POST['title'] ?? $video['title'];
+    $new_script = $_POST['script'] ?? $video['script'];
+    $new_description = $_POST['description'] ?? $video['description'];
+    $new_tags = $_POST['tags'] ?? $video['tags'];
+
     try {
         $pdo->beginTransaction();
 
-        // Check limits again just in case
+        // Check limits again
         $stmt_user = $pdo->prepare("SELECT monthly_limit, videos_used FROM users WHERE id = ?");
         $stmt_user->execute([$user_id]);
         $user_data = $stmt_user->fetch();
 
         if ($user_data['videos_used'] >= $user_data['monthly_limit']) {
-            throw new Exception("Limită de video-uri atinsă.");
+            throw new Exception("Limită de video-uri atinsă. Te rugăm să faci upgrade.");
         }
 
-        // Update status to pending_production
-        $stmt = $pdo->prepare("UPDATE videos SET status = 'pending_production' WHERE id = ?");
-        $stmt->execute([$video_id]);
+        // 1. Save changes and update status to 'pending'
+        $stmt = $pdo->prepare("UPDATE videos SET title = ?, script = ?, description = ?, tags = ?, status = 'pending' WHERE id = ?");
+        $stmt->execute([$new_title, $new_script, $new_description, $new_tags, $video_id]);
 
-        // Increment usage
+        // 2. Increment usage
         $stmt = $pdo->prepare("UPDATE users SET videos_used = videos_used + 1 WHERE id = ?");
         $stmt->execute([$user_id]);
 
         $pdo->commit();
 
-        header("Location: dashboard.php?success=Video-ul tău este în producție!");
+        // Redirect to dashboard with success message as requested in Dashboard logic
+        header("Location: dashboard.php?success=Video-ul tău a fost trimis la procesare! Verifică Dashboard-ul în câteva minute.");
         exit;
     } catch (Exception $e) {
-        $pdo->rollBack();
+        if ($pdo->inTransaction()) $pdo->rollBack();
         $error = "Eroare: " . $e->getMessage();
     }
 }
@@ -67,12 +74,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Editare Draft - Video AI</title>
+    <title>Studio Creație - Video AI</title>
     <style>
+        :root {
+            --bg-dark: #121212;
+            --card-bg: #1e1e1e;
+            --input-bg: #2c2c2c;
+            --accent-purple: #bb86fc;
+            --accent-turquoise: #03dac6;
+            --text-main: #e0e0e0;
+            --text-dim: #b0b0b0;
+            --border-color: #333;
+        }
+
         body {
-            background-color: #121212;
-            color: #e0e0e0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Inter', 'Segoe UI', Roboto, sans-serif;
             margin: 0;
             display: flex;
         }
@@ -87,96 +105,145 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm'])) {
 
         .container {
             width: 100%;
-            max-width: 800px;
+            max-width: 900px;
         }
 
         h1 {
             color: #ffffff;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(45deg, var(--accent-purple), var(--accent-turquoise));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            color: var(--text-dim);
             margin-bottom: 2rem;
         }
 
-        .card {
-            background-color: #1e1e1e;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-            margin-bottom: 2rem;
+        .studio-card {
+            background-color: var(--card-bg);
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--border-color);
         }
 
-        .field {
+        .form-group {
             margin-bottom: 1.5rem;
         }
 
-        .label {
+        label {
             display: block;
             margin-bottom: 0.5rem;
-            font-weight: bold;
-            color: #bb86fc;
-            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--accent-purple);
+            font-size: 0.85rem;
             text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
-        .value {
-            background-color: #2c2c2c;
+        input[type="text"], textarea {
+            width: 100%;
             padding: 1rem;
-            border-radius: 4px;
-            border: 1px solid #333;
-            line-height: 1.6;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background-color: var(--input-bg);
+            color: #fff;
+            font-size: 1rem;
+            box-sizing: border-box;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        input[type="text"]:focus, textarea:focus {
+            outline: none;
+            border-color: var(--accent-turquoise);
+            box-shadow: 0 0 0 2px rgba(3, 218, 198, 0.2);
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 120px;
+            line-height: 1.5;
+        }
+
+        .script-area {
+            min-height: 180px;
+        }
+
+        .images-section {
+            margin: 2.5rem 0;
         }
 
         .images-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 1rem;
+            gap: 1.5rem;
             margin-top: 1rem;
         }
 
-        .images-grid img {
-            width: 100%;
-            border-radius: 4px;
-            border: 1px solid #333;
+        .image-card {
+            background-color: var(--input-bg);
+            padding: 0.5rem;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            transition: transform 0.3s;
         }
 
-        .btn-confirm {
+        .image-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--accent-purple);
+        }
+
+        .image-card img {
             width: 100%;
-            padding: 1.2rem;
+            height: auto;
+            border-radius: 8px;
+            display: block;
+        }
+
+        .btn-produce {
+            width: 100%;
+            padding: 1.25rem;
             border: none;
-            border-radius: 4px;
-            background-color: #03dac6;
+            border-radius: 12px;
+            background: linear-gradient(90deg, #00b09b, #96c93d); /* Gradient verde/albastru-ish as requested */
             color: #121212;
-            font-weight: bold;
+            font-weight: 800;
             font-size: 1.2rem;
             cursor: pointer;
-            transition: transform 0.2s, background-color 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            box-shadow: 0 4px 15px rgba(0, 176, 155, 0.4);
+            transition: all 0.3s ease;
+            margin-top: 2rem;
         }
 
-        .btn-confirm:hover {
-            background-color: #01b0a1;
-            transform: scale(1.01);
+        .btn-produce:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 176, 155, 0.6);
+            filter: brightness(1.1);
+        }
+
+        .btn-produce:active {
+            transform: translateY(0);
         }
 
         .error {
-            color: #cf6679;
-            background-color: rgba(207, 102, 121, 0.1);
+            color: #ff5252;
+            background-color: rgba(255, 82, 82, 0.1);
             padding: 1rem;
-            border-radius: 4px;
-            margin-bottom: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
             text-align: center;
+            border: 1px solid rgba(255, 82, 82, 0.2);
         }
 
-        .tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-        }
-
-        .tag {
-            background-color: #333;
-            color: #bb86fc;
-            padding: 0.3rem 0.8rem;
-            border-radius: 20px;
-            font-size: 0.85rem;
-        }
+        /* Sidebar adjustment if header.php is used */
+        <?php if (file_exists(__DIR__ . '/../views/header.php')): ?>
+        /* Assuming sidebar is 250px wide in header.php */
+        <?php endif; ?>
     </style>
 </head>
 <body>
@@ -184,52 +251,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm'])) {
 
     <div class="main-content">
         <div class="container">
-            <h1>Revizuire Draft Video</h1>
+            <h1>Studio Creație Video</h1>
+            <p class="subtitle">Rafinează-ți conținutul generat de AI înainte de producția finală.</p>
 
             <?php if ($error): ?>
                 <div class="error"><?php echo htmlspecialchars($error); ?></div>
             <?php endif; ?>
 
-            <div class="card">
-                <div class="field">
-                    <span class="label">Titlu</span>
-                    <div class="value"><?php echo htmlspecialchars($video['title']); ?></div>
-                </div>
-
-                <div class="field">
-                    <span class="label">Descriere</span>
-                    <div class="value"><?php echo nl2br(htmlspecialchars($video['description'])); ?></div>
-                </div>
-
-                <div class="field">
-                    <span class="label">Script</span>
-                    <div class="value"><?php echo nl2br(htmlspecialchars($video['script'])); ?></div>
-                </div>
-
-                <div class="field">
-                    <span class="label">Etichete</span>
-                    <div class="tags">
-                        <?php
-                        $tags = explode(',', $video['tags']);
-                        foreach ($tags as $tag):
-                        ?>
-                            <span class="tag"><?php echo htmlspecialchars(trim($tag)); ?></span>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-
-                <div class="field">
-                    <span class="label">Imagini Generate</span>
-                    <div class="images-grid">
-                        <img src="<?php echo htmlspecialchars($video['image1']); ?>" alt="Imagine 1">
-                        <img src="<?php echo htmlspecialchars($video['image2']); ?>" alt="Imagine 2">
-                        <img src="<?php echo htmlspecialchars($video['image3']); ?>" alt="Imagine 3">
-                    </div>
-                </div>
-            </div>
-
             <form method="POST">
-                <button type="submit" name="confirm" class="btn-confirm">CONFIRMĂ ȘI GENEREAZĂ VIDEO FINAL</button>
+                <div class="studio-card">
+                    <div class="form-group">
+                        <label for="title">Titlu Video</label>
+                        <input type="text" name="title" id="title" value="<?php echo htmlspecialchars($video['title']); ?>" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="script">Script Video (Voce AI)</label>
+                        <textarea name="script" id="script" class="script-area" required><?php echo htmlspecialchars($video['script']); ?></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="description">Descriere Social Media</label>
+                        <textarea name="description" id="description"><?php echo htmlspecialchars($video['description']); ?></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="tags">Etichete (Tags)</label>
+                        <input type="text" name="tags" id="tags" value="<?php echo htmlspecialchars($video['tags']); ?>">
+                    </div>
+
+                    <div class="images-section">
+                        <label>Storyboard Vizual</label>
+                        <div class="images-grid">
+                            <div class="image-card">
+                                <img src="<?php echo htmlspecialchars($video['image1']); ?>" alt="Scena 1">
+                            </div>
+                            <div class="image-card">
+                                <img src="<?php echo htmlspecialchars($video['image2']); ?>" alt="Scena 2">
+                            </div>
+                            <div class="image-card">
+                                <img src="<?php echo htmlspecialchars($video['image3']); ?>" alt="Scena 3">
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" name="produce" class="btn-produce">PRODUCE VIDEO (30 SEC)</button>
+                </div>
             </form>
         </div>
     </div>
