@@ -6,7 +6,6 @@ set_time_limit(120); // 2 minutes for API calls and downloads
 
 // /var/www/video-ai/public/generate.php
 
-set_time_limit(240);
 session_start();
 
 // Security Middleware
@@ -42,7 +41,7 @@ function generateAndDownloadImage($prompt, $videoId, $index) {
 
     $payload = [
         "prompt" => $prompt,
-        "model" => "flux",
+        "model" => "flux", 
         "width" => 1080,
         "height" => 1920
     ];
@@ -85,12 +84,12 @@ function generateAndDownloadImage($prompt, $videoId, $index) {
     $filename = "img_" . $videoId . "_" . $index . "_" . time() . ".jpg";
     $relative_path = "uploads/images/" . $filename;
     $absolute_path = __DIR__ . "/" . $relative_path;
-
+    
     $dir = dirname($absolute_path);
     if (!is_dir($dir)) mkdir($dir, 0775, true);
-
+    
     file_put_contents($absolute_path, $imgData);
-
+    
     return $relative_path;
 }
 

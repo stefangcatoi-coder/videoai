@@ -60,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
 
         $payload = [
             "input" => $new_script,
-            "voice_id" => "george",
+            "voice_id" => "george", 
             "language" => "ro-RO",
             "audio_format" => "mp3",
             "model" => "simba-multilingual"
@@ -98,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
         $filename = "voiceover_" . $video_id . "_" . time() . ".mp3";
         $upload_dir = __DIR__ . "/uploads/audio/";
         if (!is_dir($upload_dir)) mkdir($upload_dir, 0775, true);
-
+        
         $file_path = $upload_dir . $filename;
         file_put_contents($file_path, $audio_content);
         $relative_audio_path = "uploads/audio/" . $filename;

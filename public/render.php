@@ -88,7 +88,7 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     // - Scale and Crop to handle 800x450 inputs
     // - Zoompan effect synchronized with audio
     $ffmpeg = "ffmpeg";
-
+    
     $ffmpeg_cmd = "$ffmpeg -y " .
         "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img1) . " " .
         "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img2) . " " .
