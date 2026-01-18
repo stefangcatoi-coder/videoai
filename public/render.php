@@ -103,9 +103,9 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img3) . " " .
         "-i " . escapeshellarg($audio) . " " .
         "-filter_complex \"" .
-        "[0:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v1]; " .
-        "[1:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v2]; " .
-        "[2:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v3]; " .
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920,setsar=1[v1]; " .
+        "[1:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920,setsar=1[v2]; " .
+        "[2:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920,setsar=1[v3]; " .
         "[v1][v2][v3]concat=n=3:v=1:a=0[v]\" " .
         "-map \"[v]\" -map 3:a -c:v libx264 -pix_fmt yuv420p -preset medium -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path) . " 2>&1";
 
