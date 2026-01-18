@@ -10,16 +10,23 @@ try {
         'image1 TEXT',
         'image2 TEXT',
         'image3 TEXT',
-        'voiceover_path TEXT'
+        'voiceover_path TEXT',
+        'video_path TEXT',
+        'prompt1 TEXT',
+        'prompt2 TEXT',
+        'prompt3 TEXT'
     ];
 
     foreach ($columns as $column) {
-        $pdo->exec("ALTER TABLE videos ADD COLUMN $column");
-        echo "Added column: $column\n";
+        try {
+            $pdo->exec("ALTER TABLE videos ADD COLUMN $column");
+            echo "Added column: $column\n";
+        } catch (PDOException $e) {
+            echo "Column $column already exists or error: " . $e->getMessage() . "\n";
+        }
     }
 
-    echo "Database updated successfully.\n";
+    echo "Database update process finished.\n";
 } catch (PDOException $e) {
-    // If columns already exist, it will throw an error, which we can ignore or handle
-    echo "Info: " . $e->getMessage() . "\n";
+    echo "Fatal Error: " . $e->getMessage() . "\n";
 }

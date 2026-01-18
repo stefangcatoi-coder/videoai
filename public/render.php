@@ -16,6 +16,13 @@ if (!isset($_SESSION['user_id'])) {
 
 require_once __DIR__ . '/../config/database.php';
 
+// Verificăm existența coloanelor esențiale în baza de date
+try {
+    $pdo->query("SELECT voiceover_path, video_path FROM videos LIMIT 1");
+} catch (PDOException $e) {
+    die("Eroare Bază de Date: Coloanele necesare (voiceover_path, video_path) lipsesc. Rulează update_db.php.");
+}
+
 $user_id = $_SESSION['user_id'];
 $video_id = $_GET['id'] ?? 0;
 
@@ -68,12 +75,13 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     $ffprobe_cmd = "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " . escapeshellarg($audio);
     $audio_duration = (float)shell_exec($ffprobe_cmd);
 
-    if (!$audio_duration) {
+    if (!$audio_duration || $audio_duration <= 0) {
         $audio_duration = 30.0; // Fallback
     }
 
+    // Calculăm durata fiecărei imagini în mod dinamic (3 imagini per video)
     $img_duration = $audio_duration / 3;
-    $zoompan_d = round($img_duration * 25); // frames at 25fps
+    $zoompan_d = round($img_duration * 25); // frames at 25fps (durata pentru zoompan)
 
     $output_filename = "video_" . $video_id . "_" . time() . ".mp4";
     $output_path = __DIR__ . "/uploads/videos/" . $output_filename;
@@ -99,7 +107,7 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         "[1:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v2]; " .
         "[2:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v3]; " .
         "[v1][v2][v3]concat=n=3:v=1:a=0[v]\" " .
-        "-map \"[v]\" -map 3:a -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path) . " 2>&1";
+        "-map \"[v]\" -map 3:a -c:v libx264 -pix_fmt yuv420p -preset medium -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path) . " 2>&1";
 
     exec($ffmpeg_cmd, $output, $return_var);
 
