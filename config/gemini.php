@@ -3,7 +3,7 @@
 
 /**
  * ATENTIE: Inlocuieste 'YOUR_API_KEY_HERE' cu cheia ta reala de la Google AI Studio.
- * Model actualizat pentru 2026: gemini-3-flash.
+ * Model actualizat: gemini-2.5-flash.
  */
 define('GEMINI_API_KEY', 'YOUR_API_KEY_HERE');
-define('GEMINI_API_URL', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent');
+define('GEMINI_API_URL', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');

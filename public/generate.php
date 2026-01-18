@@ -38,16 +38,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
 
     if (!empty($idea)) {
         try {
-            // 1. Prepare Prompt for Gemini
+            // 1. Prepare Prompt for Gemini (Strictly JSON, no markdown)
             $prompt = "Generează un plan video pentru ideea: \"$idea\".
-            Răspunsul tău TREBUIE să fie un obiect JSON pur, FĂRĂ MARCAJE MARKDOWN (fără ```json), fără alte explicații, strict în limba română (cu excepția tag-urilor și a image_prompts dacă e cazul), cu următoarele câmpuri:
+            Răspunsul tău TREBUIE să fie un obiect JSON pur, FĂRĂ MARCAJE MARKDOWN (fără ```json), fără nicio altă explicație în plus, strict în limba română (cu excepția tag-urilor și a image_prompts), cu următoarele câmpuri:
             - title: Un titlu atractiv.
             - script: Un text de exact 50-60 de cuvinte (pentru aproximativ 30 secunde de voce).
             - description: O descriere pentru social media.
             - tags: O listă cu 5 etichete relevante separate prin virgulă.
             - image_prompts: Un array cu 3 descrieri vizuale scurte (în engleză) pentru un generator de imagini AI.
 
-            Exemplu format cerut (doar JSON pur):
+            Exemplu format cerut (strict JSON):
             {
               \"title\": \"Titlu\",
               \"script\": \"Textul scriptului aici...\",
@@ -56,9 +56,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
               \"image_prompts\": [\"prompt 1\", \"prompt 2\", \"prompt 3\"]
             }";
 
-            // 2. Call Gemini API (Strictly following latest documentation)
-            $apiKey = trim(GEMINI_API_KEY);
-            $url = GEMINI_API_URL . "?key=" . $apiKey;
+            // 2. Call Gemini API (Latest 2026 standards)
+            $url = GEMINI_API_URL . "?key=" . trim(GEMINI_API_KEY);
 
             $payload = [
                 "contents" => [
@@ -75,14 +74,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
             curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Bypass SSL verification for VPS
 
             $response = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
 
             if ($httpCode !== 200) {
-                // Log response for debugging if needed (could be 404, 400, etc.)
-                throw new Exception("Eroare API Gemini (HTTP $httpCode). Te rugăm să verifici dacă URL-ul și cheia API sunt corecte în config/gemini.php.");
+                // Save raw response for debugging
+                file_put_contents(__DIR__ . '/../storage/debug_api.log', $response);
+                throw new Exception("Eroare API Gemini (HTTP $httpCode). Verifică storage/debug_api.log pentru detalii.");
             }
 
             $result = json_decode($response, true);
