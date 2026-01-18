@@ -2,7 +2,7 @@
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
-set_time_limit(120); // 2 minutes for API calls and downloads
+set_time_limit(600); // 10 minutes for API calls and downloads
 
 // /var/www/video-ai/public/generate.php
 
@@ -41,9 +41,10 @@ function generateAndDownloadImage($prompt, $videoId, $index) {
 
     $payload = [
         "prompt" => $prompt,
-        "model" => "flux", 
+        "model" => "Flux.1-schnell",
         "width" => 1080,
-        "height" => 1920
+        "height" => 1920,
+        "seed" => rand(1, 99999999)
     ];
 
     $ch = curl_init($url);
@@ -62,21 +63,60 @@ function generateAndDownloadImage($prompt, $videoId, $index) {
     curl_close($ch);
 
     if ($httpCode !== 200) {
-        // Fallback or Log
-        file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "HTTP $httpCode: " . $response . "\n", FILE_APPEND);
+        file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "HTTP $httpCode (Initiate): " . $response . "\n", FILE_APPEND);
         throw new Exception("Eroare DeAPI (HTTP $httpCode). Verifică storage/debug_deapi.log.");
     }
 
     $result = json_decode($response, true);
-    // Assuming 'data', 'url', or 'output' contains the image URL
-    $imgUrl = $result['data'][0]['url'] ?? $result['url'] ?? $result['output'][0] ?? '';
+    $requestId = $result['request_id'] ?? $result['id'] ?? null;
+
+    if (!$requestId) {
+        $imgUrl = $result['data'][0]['url'] ?? $result['url'] ?? $result['output'][0] ?? '';
+        if (empty($imgUrl)) {
+            throw new Exception("DeAPI nu a returnat un request_id sau un URL valid.");
+        }
+    } else {
+        // Polling for the asynchronous result
+        $statusUrl = DEAPI_STATUS_URL . $requestId;
+        $maxAttempts = 40;
+        $attempts = 0;
+        $imgUrl = '';
+
+        while ($attempts < $maxAttempts) {
+            sleep(3);
+            $attempts++;
+
+            $ch = curl_init($statusUrl);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Bearer $apiKey"]);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+
+            $statusRes = curl_exec($ch);
+            $statusHttp = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($statusHttp === 200) {
+                $statusData = json_decode($statusRes, true);
+                $status = $statusData['status'] ?? '';
+
+                if ($status === 'completed' || $status === 'succeeded' || isset($statusData['output']) || isset($statusData['url'])) {
+                     $imgUrl = $statusData['output'][0] ?? $statusData['url'] ?? ($statusData['data'][0]['url'] ?? '');
+                     if ($imgUrl) break;
+                } elseif ($status === 'failed') {
+                    file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "Status Failed: " . $statusRes . "\n", FILE_APPEND);
+                    throw new Exception("Generarea imaginii a eșuat la DeAPI.");
+                }
+            }
+        }
+    }
 
     if (empty($imgUrl)) {
-        throw new Exception("DeAPI nu a returnat un URL valid pentru imagine.");
+        throw new Exception("Timeout sau eroare la obținerea URL-ului imaginii de la DeAPI.");
     }
 
     // Download local
-    $imgData = file_get_contents($imgUrl);
+    $imgData = @file_get_contents($imgUrl);
     if ($imgData === false) {
         throw new Exception("Nu am putut descărca imaginea de la URL: " . $imgUrl);
     }
@@ -110,7 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                 - script: Un text de exact 50-60 de cuvinte, optimizat pentru retenție: începe cu o întrebare intrigantă, oferă informație utilă la mijloc și încheie cu un îndemn clar de abonare.
                 - description: O descriere optimizată SEO care să respecte structura: o introducere captivantă, 3 puncte cheie (bullet points) despre subiect și un Call to Action (CTA) final.
                 - tags: O listă de 15-20 de etichete relevante, separate prin virgulă, incluzând atât cuvinte cheie generale, cât și 'long-tail keywords' specifice.
-                - image_prompts: Un array cu 3 descrieri vizuale scurte, EXCLUSIV ÎN LIMBA ENGLEZĂ, pentru un generator de imagini AI.
+                - image_prompts: Un array cu 3 descrieri vizuale detaliate, EXCLUSIV ÎN LIMBA ENGLEZĂ. Fiecare prompt trebuie să fie o descriere cinematică complexă pentru modelul Flux.1, incluzând detalii despre subiect, compoziție (ex: eye-level, wide shot), iluminare (ex: cinematic lighting, soft bokeh) și stil (ex: photorealistic, 8k, highly detailed). Promptele trebuie să fie direct legate de ideea video-ului și să asigure o continuitate vizuală între cele 3 scene.
 
                 Exemplu format cerut (strict JSON):
                 {
@@ -242,7 +282,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
     </div>
     <div id="loading" class="loading-overlay">
         <div class="spinner"></div>
-        <p>Gemini și DeAPI lucrează... Te rugăm să aștepți (aprox. 30s).</p>
+        <p>Gemini și DeAPI lucrează... Te rugăm să aștepți (aprox. 1-2 minute).</p>
     </div>
     <script>
         document.getElementById('genForm').addEventListener('submit', function() {
