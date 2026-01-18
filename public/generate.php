@@ -41,7 +41,7 @@ function generateAndDownloadImage($prompt, $videoId, $index) {
 
     $payload = [
         "prompt" => $prompt,
-        "model" => "Flux.1-schnell",
+        "model" => "Flux1schnell",
         "width" => 1080,
         "height" => 1920,
         "seed" => rand(1, 99999999)
