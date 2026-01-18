@@ -69,12 +69,14 @@ function generateAndDownloadImage($prompt, $videoId, $index) {
     }
 
     $result = json_decode($response, true);
-    $requestId = $result['request_id'] ?? $result['id'] ?? null;
+    // Log successful response for debugging if it doesn't meet criteria
+    $requestId = $result['request_id'] ?? $result['id'] ?? $result['data']['id'] ?? $result['data']['request_id'] ?? $result['task_id'] ?? null;
 
     if (!$requestId) {
-        $imgUrl = $result['data'][0]['url'] ?? $result['url'] ?? $result['output'][0] ?? '';
+        $imgUrl = $result['data'][0]['url'] ?? $result['url'] ?? $result['output'][0] ?? $result['data']['url'] ?? '';
         if (empty($imgUrl)) {
-            throw new Exception("DeAPI nu a returnat un request_id sau un URL valid.");
+            file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "HTTP 200 (Invalid Format): " . $response . "\n", FILE_APPEND);
+            throw new Exception("DeAPI nu a returnat un request_id sau un URL valid. Verifică storage/debug_deapi.log.");
         }
     } else {
         // Polling for the asynchronous result
@@ -101,8 +103,8 @@ function generateAndDownloadImage($prompt, $videoId, $index) {
                 $statusData = json_decode($statusRes, true);
                 $status = $statusData['status'] ?? '';
 
-                if ($status === 'completed' || $status === 'succeeded' || isset($statusData['output']) || isset($statusData['url'])) {
-                     $imgUrl = $statusData['output'][0] ?? $statusData['url'] ?? ($statusData['data'][0]['url'] ?? '');
+                if ($status === 'completed' || $status === 'succeeded' || isset($statusData['output']) || isset($statusData['url']) || isset($statusData['data']['url'])) {
+                     $imgUrl = $statusData['output'][0] ?? $statusData['url'] ?? ($statusData['data'][0]['url'] ?? $statusData['data']['url'] ?? '');
                      if ($imgUrl) break;
                 } elseif ($status === 'failed') {
                     file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "Status Failed: " . $statusRes . "\n", FILE_APPEND);
