@@ -6,6 +6,7 @@ set_time_limit(120); // 2 minutes for API calls and downloads
 
 // /var/www/video-ai/public/generate.php
 
+set_time_limit(240);
 session_start();
 
 // Security Middleware
