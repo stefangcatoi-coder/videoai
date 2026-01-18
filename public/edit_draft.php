@@ -14,6 +14,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../config/speechify.php';
 
 $user_id = $_SESSION['user_id'];
 $video_id = $_GET['id'] ?? 0;
@@ -30,12 +31,17 @@ if (!$video || $video['status'] !== 'draft') {
 
 $error = '';
 
-// Handle Confirmation
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm'])) {
+// Handle Production Request (Speechify Integration)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
+    $new_title = $_POST['title'] ?? $video['title'];
+    $new_script = $_POST['script'] ?? $video['script'];
+    $new_description = $_POST['description'] ?? $video['description'];
+    $new_tags = $_POST['tags'] ?? $video['tags'];
+
     try {
         $pdo->beginTransaction();
 
-        // Check limits again just in case
+        // 1. Check user limits
         $stmt_user = $pdo->prepare("SELECT monthly_limit, videos_used FROM users WHERE id = ?");
         $stmt_user->execute([$user_id]);
         $user_data = $stmt_user->fetch();
@@ -44,21 +50,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm'])) {
             throw new Exception("Limită de video-uri atinsă.");
         }
 
-        // Update status to pending_production
-        $stmt = $pdo->prepare("UPDATE videos SET status = 'pending_production' WHERE id = ?");
-        $stmt->execute([$video_id]);
+        // 2. Save changes locally
+        $stmt_update = $pdo->prepare("UPDATE videos SET title = ?, script = ?, description = ?, tags = ? WHERE id = ?");
+        $stmt_update->execute([$new_title, $new_script, $new_description, $new_tags, $video_id]);
 
-        // Increment usage
-        $stmt = $pdo->prepare("UPDATE users SET videos_used = videos_used + 1 WHERE id = ?");
-        $stmt->execute([$user_id]);
+        // 3. Call Speechify API for Voiceover
+        $apiKey = SPEECHIFY_API_KEY;
+        $url = SPEECHIFY_API_URL;
+
+        $payload = [
+            "input" => $new_script,
+            "voice_id" => "george",
+            "language" => "ro-RO",
+            "audio_format" => "mp3",
+            "model" => "simba-multilingual"
+        ];
+
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            "Authorization: Bearer $apiKey",
+            "Content-Type: application/json"
+        ]);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode !== 200) {
+            file_put_contents(__DIR__ . '/../storage/debug_speechify.log', "HTTP $httpCode: " . $response . "\n", FILE_APPEND);
+            throw new Exception("Eroare Speechify API (HTTP $httpCode).");
+        }
+
+        $result = json_decode($response, true);
+        $audio_base64 = $result['audio_data'] ?? '';
+
+        if (empty($audio_base64)) {
+            throw new Exception("Speechify nu a returnat date audio.");
+        }
+
+        // 4. Save Audio File
+        $audio_content = base64_decode($audio_base64);
+        $filename = "voiceover_" . $video_id . "_" . time() . ".mp3";
+        $upload_dir = __DIR__ . "/uploads/audio/";
+        if (!is_dir($upload_dir)) mkdir($upload_dir, 0775, true);
+
+        $file_path = $upload_dir . $filename;
+        file_put_contents($file_path, $audio_content);
+        $relative_audio_path = "uploads/audio/" . $filename;
+
+        // 5. Update Database Status to ready_for_render
+        $stmt_final = $pdo->prepare("UPDATE videos SET status = 'ready_for_render', voiceover_path = ? WHERE id = ?");
+        $stmt_final->execute([$relative_audio_path, $video_id]);
+
+        // 6. Increment usage
+        $stmt_inc = $pdo->prepare("UPDATE users SET videos_used = videos_used + 1 WHERE id = ?");
+        $stmt_inc->execute([$user_id]);
 
         $pdo->commit();
 
-        header("Location: dashboard.php?success=Video-ul tău este în producție!");
+        // 7. Redirect to render.php
+        header("Location: render.php?id=" . $video_id);
         exit;
+
     } catch (Exception $e) {
-        $pdo->rollBack();
-        $error = "Eroare: " . $e->getMessage();
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        $error = $e->getMessage();
     }
 }
 ?>
@@ -67,169 +128,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Editare Draft - Video AI</title>
+    <title>Studio Creație - Video AI</title>
     <style>
-        body {
-            background-color: #121212;
-            color: #e0e0e0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            display: flex;
+        :root {
+            --bg-dark: #121212; --card-bg: #1e1e1e; --input-bg: #2c2c2c;
+            --accent-purple: #bb86fc; --accent-turquoise: #03dac6;
+            --text-main: #e0e0e0; --text-dim: #b0b0b0; --border-color: #333;
         }
-
-        .main-content {
-            margin-left: 250px;
-            padding: 2rem;
-            width: 100%;
-            display: flex;
-            justify-content: center;
-        }
-
-        .container {
-            width: 100%;
-            max-width: 800px;
-        }
-
-        h1 {
-            color: #ffffff;
-            margin-bottom: 2rem;
-        }
-
-        .card {
-            background-color: #1e1e1e;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-            margin-bottom: 2rem;
-        }
-
-        .field {
-            margin-bottom: 1.5rem;
-        }
-
-        .label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: bold;
-            color: #bb86fc;
-            font-size: 0.9rem;
-            text-transform: uppercase;
-        }
-
-        .value {
-            background-color: #2c2c2c;
-            padding: 1rem;
-            border-radius: 4px;
-            border: 1px solid #333;
-            line-height: 1.6;
-        }
-
-        .images-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1rem;
-            margin-top: 1rem;
-        }
-
-        .images-grid img {
-            width: 100%;
-            border-radius: 4px;
-            border: 1px solid #333;
-        }
-
-        .btn-confirm {
-            width: 100%;
-            padding: 1.2rem;
-            border: none;
-            border-radius: 4px;
-            background-color: #03dac6;
-            color: #121212;
-            font-weight: bold;
-            font-size: 1.2rem;
-            cursor: pointer;
-            transition: transform 0.2s, background-color 0.3s;
-        }
-
-        .btn-confirm:hover {
-            background-color: #01b0a1;
-            transform: scale(1.01);
-        }
-
-        .error {
-            color: #cf6679;
-            background-color: rgba(207, 102, 121, 0.1);
-            padding: 1rem;
-            border-radius: 4px;
-            margin-bottom: 1.5rem;
-            text-align: center;
-        }
-
-        .tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-        }
-
-        .tag {
-            background-color: #333;
-            color: #bb86fc;
-            padding: 0.3rem 0.8rem;
-            border-radius: 20px;
-            font-size: 0.85rem;
-        }
+        body { background-color: var(--bg-dark); color: var(--text-main); font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; }
+        .main-content { margin-left: 250px; padding: 2rem; width: 100%; display: flex; justify-content: center; }
+        .container { width: 100%; max-width: 900px; }
+        h1 { background: linear-gradient(45deg, var(--accent-purple), var(--accent-turquoise)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .studio-card { background-color: var(--card-bg); padding: 2rem; border-radius: 16px; border: 1px solid var(--border-color); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .form-group { margin-bottom: 1.5rem; }
+        label { display: block; margin-bottom: 0.5rem; color: var(--accent-purple); font-weight: 600; text-transform: uppercase; font-size: 0.8rem; }
+        input[type="text"], textarea { width: 100%; padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--input-bg); color: #fff; box-sizing: border-box; }
+        textarea { min-height: 100px; }
+        .images-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 1rem; }
+        .image-card img { width: 100%; border-radius: 8px; border: 1px solid var(--border-color); }
+        .btn-produce { width: 100%; padding: 1rem; border: none; border-radius: 12px; background: linear-gradient(90deg, #00b09b, #96c93d); color: #121212; font-weight: 800; cursor: pointer; margin-top: 2rem; }
+        .loader-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; }
+        .spinner { width: 50px; height: 50px; border: 5px solid rgba(255,255,255,0.1); border-top: 5px solid var(--accent-turquoise); border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <?php include __DIR__ . '/../views/header.php'; ?>
-
+    <div id="loader" class="loader-overlay"><div class="spinner"></div><div style="color:#fff; margin-top:1rem;">Generăm Vocea...</div></div>
     <div class="main-content">
         <div class="container">
-            <h1>Revizuire Draft Video</h1>
-
-            <?php if ($error): ?>
-                <div class="error"><?php echo htmlspecialchars($error); ?></div>
-            <?php endif; ?>
-
-            <div class="card">
-                <div class="field">
-                    <span class="label">Titlu</span>
-                    <div class="value"><?php echo htmlspecialchars($video['title']); ?></div>
-                </div>
-
-                <div class="field">
-                    <span class="label">Descriere</span>
-                    <div class="value"><?php echo nl2br(htmlspecialchars($video['description'])); ?></div>
-                </div>
-
-                <div class="field">
-                    <span class="label">Script</span>
-                    <div class="value"><?php echo nl2br(htmlspecialchars($video['script'])); ?></div>
-                </div>
-
-                <div class="field">
-                    <span class="label">Etichete</span>
-                    <div class="tags">
-                        <?php
-                        $tags = explode(',', $video['tags']);
-                        foreach ($tags as $tag):
-                        ?>
-                            <span class="tag"><?php echo htmlspecialchars(trim($tag)); ?></span>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-
-                <div class="field">
-                    <span class="label">Imagini Generate</span>
+            <h1>Studio Creație Video</h1>
+            <?php if ($error): ?><div style="color:#ff5252;"><?php echo htmlspecialchars($error); ?></div><?php endif; ?>
+            <form method="POST" onsubmit="document.getElementById('loader').style.display='flex'">
+                <div class="studio-card">
+                    <div class="form-group"><label>Titlu Video</label><input type="text" name="title" value="<?php echo htmlspecialchars($video['title']); ?>" required></div>
+                    <div class="form-group"><label>Script (Voce AI)</label><textarea name="script" required><?php echo htmlspecialchars($video['script']); ?></textarea></div>
+                    <div class="form-group"><label>Descriere SEO</label><textarea name="description"><?php echo htmlspecialchars($video['description']); ?></textarea></div>
+                    <div class="form-group"><label>Etichete</label><input type="text" name="tags" value="<?php echo htmlspecialchars($video['tags']); ?>"></div>
+                    <label>Imagini Generate (DeAPI)</label>
                     <div class="images-grid">
-                        <img src="<?php echo htmlspecialchars($video['image1']); ?>" alt="Imagine 1">
-                        <img src="<?php echo htmlspecialchars($video['image2']); ?>" alt="Imagine 2">
-                        <img src="<?php echo htmlspecialchars($video['image3']); ?>" alt="Imagine 3">
+                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image1']); ?>"></div>
+                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image2']); ?>"></div>
+                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image3']); ?>"></div>
                     </div>
+                    <button type="submit" name="produce" class="btn-produce">GENEREAZĂ VIDEO FINAL</button>
                 </div>
-            </div>
-
-            <form method="POST">
-                <button type="submit" name="confirm" class="btn-confirm">CONFIRMĂ ȘI GENEREAZĂ VIDEO FINAL</button>
             </form>
         </div>
     </div>

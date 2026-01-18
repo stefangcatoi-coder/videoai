@@ -2,6 +2,7 @@
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
+set_time_limit(120); // 2 minutes for API calls and downloads
 
 // /var/www/video-ai/public/generate.php
 
@@ -34,205 +35,162 @@ if (!$user) {
 
 $can_generate = ($user['videos_used'] < $user['monthly_limit']);
 
-/**
- * Helper function to generate image using DeAPI.ai Flux.1 Schnell
- */
-function generateImage($imgPrompt) {
-    if (empty(DEAPI_API_KEY) || DEAPI_API_KEY === 'YOUR_DEAPI_API_KEY_HERE') {
-        // Fallback to picsum if key is not set (useful for testing without wasting credits or if key missing)
-        return "https://picsum.photos/1024/1920?random=" . rand(1, 10000);
-    }
+// Helper function to generate and download image via DeAPI.ai
+function generateAndDownloadImage($prompt, $videoId, $index) {
+    $apiKey = trim(DEAPI_API_KEY);
+    $url = DEAPI_API_URL;
 
     $payload = [
-        "prompt" => $imgPrompt,
-        "model" => "Flux1schnell",
-        "width" => 1024, // Multiple of 128
-        "height" => 1920, // Multiple of 128
-        "steps" => 4,
-        "guidance" => 0,
-        "seed" => rand(1, 1000000),
-        "loras" => []
+        "prompt" => $prompt,
+        "model" => "flux",
+        "width" => 1080,
+        "height" => 1920
     ];
 
-    $ch = curl_init(DEAPI_API_URL);
+    $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Authorization: Bearer ' . trim(DEAPI_API_KEY),
-        'Accept: application/json'
+        "Authorization: Bearer $apiKey",
+        "Content-Type: application/json"
     ]);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
 
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
     if ($httpCode !== 200) {
-        // Log error and fallback
-        error_log("DeAPI Error (HTTP $httpCode): " . $response);
-        return "https://picsum.photos/1024/1920?random=" . rand(1, 10000);
+        // Fallback or Log
+        file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "HTTP $httpCode: " . $response . "\n", FILE_APPEND);
+        throw new Exception("Eroare DeAPI (HTTP $httpCode). Verifică storage/debug_deapi.log.");
     }
 
-    $resData = json_decode($response, true);
-    $requestId = $resData['request_id'] ?? null;
+    $result = json_decode($response, true);
+    // Assuming 'data', 'url', or 'output' contains the image URL
+    $imgUrl = $result['data'][0]['url'] ?? $result['url'] ?? $result['output'][0] ?? '';
 
-    if (!$requestId) {
-        return "https://picsum.photos/1024/1920?random=" . rand(1, 10000);
+    if (empty($imgUrl)) {
+        throw new Exception("DeAPI nu a returnat un URL valid pentru imagine.");
     }
 
-    // Polling for the image
-    $maxAttempts = 30;
-    $imageUrl = null;
-    for ($i = 0; $i < $maxAttempts; $i++) {
-        sleep(3);
-        $ch = curl_init(DEAPI_STATUS_URL . $requestId);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'Authorization: Bearer ' . trim(DEAPI_API_KEY)
-        ]);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        $statusRes = curl_exec($ch);
-        curl_close($ch);
-
-        $statusData = json_decode($statusRes, true);
-        if (($statusData['status'] ?? '') === 'done') {
-            $imageUrl = $statusData['result']['output'][0] ?? null;
-            break;
-        } elseif (($statusData['status'] ?? '') === 'error') {
-            error_log("DeAPI Job Error: " . json_encode($statusData));
-            break;
-        }
+    // Download local
+    $imgData = file_get_contents($imgUrl);
+    if ($imgData === false) {
+        throw new Exception("Nu am putut descărca imaginea de la URL: " . $imgUrl);
     }
 
-    if ($imageUrl) {
-        // Download and save locally
-        $imgContent = file_get_contents($imageUrl);
-        if ($imgContent) {
-            $filename = 'img_' . time() . '_' . uniqid() . '.png';
-            $uploadDir = __DIR__ . '/uploads/images/';
-            if (!is_dir($uploadDir)) {
-                mkdir($uploadDir, 0777, true);
-            }
-            file_put_contents($uploadDir . $filename, $imgContent);
-            return 'uploads/images/' . $filename;
-        }
-    }
+    $filename = "img_" . $videoId . "_" . $index . "_" . time() . ".jpg";
+    $relative_path = "uploads/images/" . $filename;
+    $absolute_path = __DIR__ . "/" . $relative_path;
 
-    return "https://picsum.photos/1024/1920?random=" . rand(1, 10000);
+    $dir = dirname($absolute_path);
+    if (!is_dir($dir)) mkdir($dir, 0775, true);
+
+    file_put_contents($absolute_path, $imgData);
+
+    return $relative_path;
 }
 
 // Processing Form Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
-    $idea = $_POST['idea'] ?? '';
+    $idea = trim($_POST['idea'] ?? '');
 
     if (!empty($idea)) {
-        try {
-            // 1. Prepare Improved Prompt for Gemini
-            $prompt = "Generează un plan video profesional pentru ideea: \"$idea\".
-            Răspunsul tău TREBUIE să fie un obiect JSON pur, fără marcaje markdown sau alte explicații, strict în limba română (cu excepția tag-urilor și a image_prompts care trebuie să fie în engleză), cu următoarele câmpuri:
-            - title: Un titlu captivant care să atragă atenția.
-            - script: Un text de exact 50-60 de cuvinte, structurat pentru un clip de 30 de secunde, cu un hook puternic la început și un îndemn la acțiune la sfârșit.
-            - description: O descriere optimizată pentru social media (SEO).
-            - tags: O listă cu 5 etichete relevante separate prin virgulă.
-            - image_prompts: Un array cu 3 descrieri vizuale detaliate și profesionale (ÎN ENGLEZĂ) pentru un generator de imagini AI (Flux.1). Descrierile trebuie să includă detalii despre stil (cinematic, hyper-realistic, 8k), iluminare (dramatic lighting, soft glow), compoziție (close-up, wide shot) și subiectul principal, astfel încât să fie perfect aliniate cu scriptul.
+        if (strlen($idea) > 500) {
+            $error = "Ideea este prea lungă (maxim 500 caractere).";
+        } else {
+            try {
+                // 1. Prepare Prompt for Gemini (SEO Optimized)
+                $prompt = "Generează un plan video profesional și optimizat SEO pentru ideea: \"$idea\".
+                Răspunsul tău TREBUIE să fie un obiect JSON pur, FĂRĂ MARCAJE MARKDOWN (fără ```json), fără nicio altă explicație în plus, strict în limba română (cu excepția image_prompts), cu următoarele câmpuri:
 
-            Exemplu format cerut:
-            {
-              \"title\": \"Titlu Pro\",
-              \"script\": \"Vrei să înveți cum să...\",
-              \"description\": \"Descoperă secretele...\",
-              \"tags\": \"ai, tehnologie, viitor, invatare, video\",
-              \"image_prompts\": [
-                \"Cinematic close-up of a high-tech robotic hand drawing on a transparent glass screen, vibrant blue neon lights, hyper-realistic, 8k resolution\",
-                \"Wide shot of a futuristic city with flying vehicles and lush green rooftops during sunset, golden hour lighting, detailed architecture\",
-                \"Close-up of a person eyes reflecting a digital interface with complex data visualizations, sharp focus, dramatic lighting\"
-              ]
-            }";
+                - title: Un titlu captivant care să includă cuvinte cheie de tip 'Hook' (cârlig) pentru a atrage click-uri.
+                - script: Un text de exact 50-60 de cuvinte, optimizat pentru retenție: începe cu o întrebare intrigantă, oferă informație utilă la mijloc și încheie cu un îndemn clar de abonare.
+                - description: O descriere optimizată SEO care să respecte structura: o introducere captivantă, 3 puncte cheie (bullet points) despre subiect și un Call to Action (CTA) final.
+                - tags: O listă de 15-20 de etichete relevante, separate prin virgulă, incluzând atât cuvinte cheie generale, cât și 'long-tail keywords' specifice.
+                - image_prompts: Un array cu 3 descrieri vizuale scurte, EXCLUSIV ÎN LIMBA ENGLEZĂ, pentru un generator de imagini AI.
 
-            // 2. Call Gemini API
-            $apiKey = GEMINI_API_KEY;
-            $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" . $apiKey;
+                Exemplu format cerut (strict JSON):
+                {
+                  \"title\": \"[HOOK] Titlu Optimizat\",
+                  \"script\": \"Vrei să afli cum...? [Informație]. Abonează-te pentru mai multe!\",
+                  \"description\": \"Intro... \n• Punct 1 \n• Punct 2 \n• Punct 3 \n\n Acționează acum!\",
+                  \"tags\": \"cuvânt1, cuvânt specific, long tail keyword...\",
+                  \"image_prompts\": [\"visual prompt 1\", \"visual prompt 2\", \"visual prompt 3\"]
+                }";
 
-            $payload = [
-                "contents" => [
-                    [
-                        "parts" => [
-                            ["text" => $prompt]
-                        ]
-                    ]
-                ]
-            ];
+                // 2. Call Gemini API
+                $url = GEMINI_API_URL . "?key=" . trim(GEMINI_API_KEY);
+                $payload = [
+                    "contents" => [["parts" => [["text" => $prompt]]]]
+                ];
 
-            $ch = curl_init($url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+                $ch = curl_init($url);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 30);
 
-            $response = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
+                $response = curl_exec($ch);
+                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
 
-            if ($httpCode !== 200) {
-                throw new Exception("Eroare API Gemini (HTTP $httpCode). Verifică cheia API.");
+                if ($httpCode !== 200) {
+                    file_put_contents(__DIR__ . '/../storage/debug_api.log', $response);
+                    throw new Exception("Eroare API Gemini (HTTP $httpCode).");
+                }
+
+                $result = json_decode($response, true);
+                $aiResponseText = $result['candidates'][0]['content']['parts'][0]['text'] ?? '';
+
+                if (preg_match('/\{.*\}/s', $aiResponseText, $matches)) {
+                    $aiResponseText = $matches[0];
+                }
+
+                $aiData = json_decode($aiResponseText, true);
+
+                if (!$aiData || !isset($aiData['script'])) {
+                    throw new Exception("AI-ul nu a returnat un format JSON valid.");
+                }
+
+                // 3. Save to Database (Initial Draft)
+                $pdo->beginTransaction();
+
+                $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags) VALUES (?, ?, 'draft', ?, ?, ?)");
+                $stmt->execute([
+                    $user_id,
+                    $aiData['title'] ?? $idea,
+                    $aiData['script'] ?? '',
+                    $aiData['description'] ?? '',
+                    $aiData['tags'] ?? ''
+                ]);
+
+                $video_id = $pdo->lastInsertId();
+
+                // 4. Generate and Save Images
+                $prompts = $aiData['image_prompts'] ?? ["Image related to $idea", "Another scene for $idea", "Final scene for $idea"];
+                $localImg1 = generateAndDownloadImage($prompts[0], $video_id, 1);
+                $localImg2 = generateAndDownloadImage($prompts[1], $video_id, 2);
+                $localImg3 = generateAndDownloadImage($prompts[2], $video_id, 3);
+
+                // Update with image paths
+                $stmt_upd = $pdo->prepare("UPDATE videos SET image1 = ?, image2 = ?, image3 = ? WHERE id = ?");
+                $stmt_upd->execute([$localImg1, $localImg2, $localImg3, $video_id]);
+
+                $pdo->commit();
+
+                header("Location: edit_draft.php?id=" . $video_id);
+                exit;
+
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                $error = $e->getMessage();
             }
-
-            $result = json_decode($response, true);
-            $aiResponseText = $result['candidates'][0]['content']['parts'][0]['text'] ?? '';
-
-            if (preg_match('/\{.*\}/s', $aiResponseText, $matches)) {
-                $aiResponseText = $matches[0];
-            }
-
-            $aiData = json_decode($aiResponseText, true);
-
-            if (!$aiData || !isset($aiData['script'])) {
-                throw new Exception("AI-ul nu a returnat un format JSON valid sau datele lipsesc.");
-            }
-
-            // 3. Generate Images using DeAPI
-            $imagePrompts = $aiData['image_prompts'] ?? [];
-            $images = [];
-            for ($i = 0; $i < 3; $i++) {
-                $prompt_text = $imagePrompts[$i] ?? "Futuristic background, cinematic, 8k";
-                $images[] = generateImage($prompt_text);
-            }
-
-            // 4. Save to Database
-            $pdo->beginTransaction();
-
-            $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags, image1, image2, image3) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)");
-
-            $title = $aiData['title'] ?? $idea;
-            $script = $aiData['script'] ?? '';
-            $description = $aiData['description'] ?? '';
-            $tags = $aiData['tags'] ?? '';
-
-            $stmt->execute([
-                $user_id,
-                $title,
-                $script,
-                $description,
-                $tags,
-                $images[0],
-                $images[1],
-                $images[2]
-            ]);
-
-            $video_id = $pdo->lastInsertId();
-            $pdo->commit();
-
-            header("Location: edit_draft.php?id=" . $video_id);
-            exit;
-
-        } catch (Exception $e) {
-            if ($pdo->inTransaction()) $pdo->rollBack();
-            $error = $e->getMessage();
         }
     } else {
         $error = "Vă rugăm să introduceți ideea video-ului.";
@@ -246,155 +204,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Generează Video - Video AI</title>
     <style>
-        body {
-            background-color: #121212;
-            color: #e0e0e0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            display: flex;
-        }
-
-        .main-content {
-            margin-left: 250px;
-            padding: 2rem;
-            width: 100%;
-            display: flex;
-            justify-content: center;
-        }
-
-        .container {
-            width: 100%;
-            max-width: 600px;
-        }
-
-        h1 {
-            color: #ffffff;
-            margin-bottom: 2rem;
-        }
-
-        .card {
-            background-color: #1e1e1e;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-        }
-
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: bold;
-            color: #bb86fc;
-        }
-
-        input {
-            width: 100%;
-            padding: 0.75rem;
-            border-radius: 4px;
-            border: 1px solid #333;
-            background-color: #2c2c2c;
-            color: #fff;
-            box-sizing: border-box;
-            font-size: 1rem;
-        }
-
-        input:focus {
-            outline: none;
-            border-color: #bb86fc;
-        }
-
-        .btn-generate {
-            width: 100%;
-            padding: 1rem;
-            border: none;
-            border-radius: 4px;
-            background-color: #03dac6;
-            color: #121212;
-            font-weight: bold;
-            font-size: 1.1rem;
-            cursor: pointer;
-            transition: background-color 0.3s;
-        }
-
-        .btn-generate:hover {
-            background-color: #01b0a1;
-        }
-
-        .error {
-            color: #cf6679;
-            background-color: rgba(207, 102, 121, 0.1);
-            padding: 1rem;
-            border-radius: 4px;
-            margin-bottom: 1.5rem;
-            text-align: center;
-        }
-
-        .loading-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.8);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-            flex-direction: column;
-        }
-
-        .spinner {
-            border: 4px solid #333;
-            border-top: 4px solid #03dac6;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin-bottom: 1rem;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
+        body { background-color: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; }
+        .main-content { margin-left: 250px; padding: 2rem; width: 100%; display: flex; justify-content: center; }
+        .container { width: 100%; max-width: 600px; }
+        h1 { color: #ffffff; margin-bottom: 2rem; }
+        .card { background-color: #1e1e1e; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5); }
+        .form-group { margin-bottom: 1.5rem; }
+        label { display: block; margin-bottom: 0.5rem; font-weight: bold; color: #bb86fc; }
+        input { width: 100%; padding: 0.75rem; border-radius: 4px; border: 1px solid #333; background-color: #2c2c2c; color: #fff; box-sizing: border-box; font-size: 1rem; }
+        .btn-generate { width: 100%; padding: 1rem; border: none; border-radius: 4px; background-color: #03dac6; color: #121212; font-weight: bold; font-size: 1.1rem; cursor: pointer; transition: background-color 0.3s; }
+        .btn-generate:hover { background-color: #01b0a1; }
+        .error { color: #cf6679; background-color: rgba(207, 102, 121, 0.1); padding: 1rem; border-radius: 4px; margin-bottom: 1.5rem; text-align: center; }
+        .loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; flex-direction: column; }
+        .spinner { border: 4px solid #333; border-top: 4px solid #03dac6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 1rem; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <?php include __DIR__ . '/../views/header.php'; ?>
-
     <div class="main-content">
         <div class="container">
             <h1>Generează Video Nou</h1>
-
             <?php if (!$can_generate): ?>
-                <div class="error">
-                    <strong>Limită atinsă!</strong><br>
-                    Ai folosit <?php echo $user['videos_used']; ?> din <?php echo $user['monthly_limit']; ?> video-uri.
-                    Te rugăm să faci upgrade pentru a genera mai multe.
-                </div>
+                <div class="error">Limită atinsă! Ai folosit <?php echo $user['videos_used']; ?> din <?php echo $user['monthly_limit']; ?> video-uri.</div>
             <?php else: ?>
                 <div class="card">
-                    <?php if ($error): ?>
-                        <div class="error"><?php echo htmlspecialchars($error); ?></div>
-                    <?php endif; ?>
-
+                    <?php if ($error): ?><div class="error"><?php echo htmlspecialchars($error); ?></div><?php endif; ?>
                     <form method="POST" id="genForm">
                         <div class="form-group">
                             <label for="idea">Ideea Video-ului</label>
-                            <input type="text" name="idea" id="idea" placeholder="Ex: Cum să gătești paste" required>
+                            <input type="text" name="idea" id="idea" placeholder="Ex: Cum să gătești paste" maxlength="500" required>
                         </div>
-                        <button type="submit" class="btn-generate">Generează Plan (Gemini + DeAPI)</button>
+                        <button type="submit" class="btn-generate">Generează Plan și Imagini AI</button>
                     </form>
                 </div>
             <?php endif; ?>
         </div>
     </div>
-
     <div id="loading" class="loading-overlay">
         <div class="spinner"></div>
-        <p>Gemini AI & DeAPI lucrează... <br>Acest proces poate dura până la 1 minut.</p>
+        <p>Gemini și DeAPI lucrează... Te rugăm să aștepți (aprox. 30s).</p>
     </div>
-
     <script>
         document.getElementById('genForm').addEventListener('submit', function() {
             document.getElementById('loading').style.display = 'flex';
