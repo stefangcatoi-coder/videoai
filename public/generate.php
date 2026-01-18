@@ -5,6 +5,7 @@ error_reporting(E_ALL);
 
 // /var/www/video-ai/public/generate.php
 
+set_time_limit(240);
 session_start();
 
 // Security Middleware
@@ -15,6 +16,7 @@ if (!isset($_SESSION['user_id'])) {
 
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../config/gemini.php';
+require_once __DIR__ . '/../config/deapi.php';
 
 $user_id = $_SESSION['user_id'];
 $error = '';
@@ -32,31 +34,125 @@ if (!$user) {
 
 $can_generate = ($user['videos_used'] < $user['monthly_limit']);
 
+/**
+ * Helper function to generate image using DeAPI.ai Flux.1 Schnell
+ */
+function generateImage($imgPrompt) {
+    if (empty(DEAPI_API_KEY) || DEAPI_API_KEY === 'YOUR_DEAPI_API_KEY_HERE') {
+        // Fallback to picsum if key is not set (useful for testing without wasting credits or if key missing)
+        return "https://picsum.photos/1024/1920?random=" . rand(1, 10000);
+    }
+
+    $payload = [
+        "prompt" => $imgPrompt,
+        "model" => "Flux1schnell",
+        "width" => 1024, // Multiple of 128
+        "height" => 1920, // Multiple of 128
+        "steps" => 4,
+        "guidance" => 0,
+        "seed" => rand(1, 1000000),
+        "loras" => []
+    ];
+
+    $ch = curl_init(DEAPI_API_URL);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . trim(DEAPI_API_KEY),
+        'Accept: application/json'
+    ]);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($httpCode !== 200) {
+        // Log error and fallback
+        error_log("DeAPI Error (HTTP $httpCode): " . $response);
+        return "https://picsum.photos/1024/1920?random=" . rand(1, 10000);
+    }
+
+    $resData = json_decode($response, true);
+    $requestId = $resData['request_id'] ?? null;
+
+    if (!$requestId) {
+        return "https://picsum.photos/1024/1920?random=" . rand(1, 10000);
+    }
+
+    // Polling for the image
+    $maxAttempts = 30;
+    $imageUrl = null;
+    for ($i = 0; $i < $maxAttempts; $i++) {
+        sleep(3);
+        $ch = curl_init(DEAPI_STATUS_URL . $requestId);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: Bearer ' . trim(DEAPI_API_KEY)
+        ]);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        $statusRes = curl_exec($ch);
+        curl_close($ch);
+
+        $statusData = json_decode($statusRes, true);
+        if (($statusData['status'] ?? '') === 'done') {
+            $imageUrl = $statusData['result']['output'][0] ?? null;
+            break;
+        } elseif (($statusData['status'] ?? '') === 'error') {
+            error_log("DeAPI Job Error: " . json_encode($statusData));
+            break;
+        }
+    }
+
+    if ($imageUrl) {
+        // Download and save locally
+        $imgContent = file_get_contents($imageUrl);
+        if ($imgContent) {
+            $filename = 'img_' . time() . '_' . uniqid() . '.png';
+            $uploadDir = __DIR__ . '/uploads/images/';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0777, true);
+            }
+            file_put_contents($uploadDir . $filename, $imgContent);
+            return 'uploads/images/' . $filename;
+        }
+    }
+
+    return "https://picsum.photos/1024/1920?random=" . rand(1, 10000);
+}
+
 // Processing Form Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
     $idea = $_POST['idea'] ?? '';
 
     if (!empty($idea)) {
         try {
-            // 1. Prepare Prompt for Gemini
-            $prompt = "Generează un plan video pentru ideea: \"$idea\".
-            Răspunsul tău TREBUIE să fie un obiect JSON pur, fără marcaje markdown sau alte explicații, strict în limba română (cu excepția tag-urilor și a image_prompts dacă e cazul), cu următoarele câmpuri:
-            - title: Un titlu atractiv.
-            - script: Un text de exact 50-60 de cuvinte (pentru aproximativ 30 secunde de voce).
-            - description: O descriere pentru social media.
+            // 1. Prepare Improved Prompt for Gemini
+            $prompt = "Generează un plan video profesional pentru ideea: \"$idea\".
+            Răspunsul tău TREBUIE să fie un obiect JSON pur, fără marcaje markdown sau alte explicații, strict în limba română (cu excepția tag-urilor și a image_prompts care trebuie să fie în engleză), cu următoarele câmpuri:
+            - title: Un titlu captivant care să atragă atenția.
+            - script: Un text de exact 50-60 de cuvinte, structurat pentru un clip de 30 de secunde, cu un hook puternic la început și un îndemn la acțiune la sfârșit.
+            - description: O descriere optimizată pentru social media (SEO).
             - tags: O listă cu 5 etichete relevante separate prin virgulă.
-            - image_prompts: Un array cu 3 descrieri vizuale scurte (în engleză) pentru un generator de imagini AI.
+            - image_prompts: Un array cu 3 descrieri vizuale detaliate și profesionale (ÎN ENGLEZĂ) pentru un generator de imagini AI (Flux.1). Descrierile trebuie să includă detalii despre stil (cinematic, hyper-realistic, 8k), iluminare (dramatic lighting, soft glow), compoziție (close-up, wide shot) și subiectul principal, astfel încât să fie perfect aliniate cu scriptul.
 
             Exemplu format cerut:
             {
-              \"title\": \"Titlu\",
-              \"script\": \"Textul scriptului aici...\",
-              \"description\": \"Descriere aici...\",
-              \"tags\": \"tag1, tag2, tag3, tag4, tag5\",
-              \"image_prompts\": [\"prompt 1\", \"prompt 2\", \"prompt 3\"]
+              \"title\": \"Titlu Pro\",
+              \"script\": \"Vrei să înveți cum să...\",
+              \"description\": \"Descoperă secretele...\",
+              \"tags\": \"ai, tehnologie, viitor, invatare, video\",
+              \"image_prompts\": [
+                \"Cinematic close-up of a high-tech robotic hand drawing on a transparent glass screen, vibrant blue neon lights, hyper-realistic, 8k resolution\",
+                \"Wide shot of a futuristic city with flying vehicles and lush green rooftops during sunset, golden hour lighting, detailed architecture\",
+                \"Close-up of a person eyes reflecting a digital interface with complex data visualizations, sharp focus, dramatic lighting\"
+              ]
             }";
 
-            // 2. Call Gemini API (Strictly following latest documentation)
+            // 2. Call Gemini API
             $apiKey = GEMINI_API_KEY;
             $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" . $apiKey;
 
@@ -75,6 +171,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
             curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
 
             $response = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -87,7 +185,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             $result = json_decode($response, true);
             $aiResponseText = $result['candidates'][0]['content']['parts'][0]['text'] ?? '';
 
-            // Try to extract JSON if it's wrapped in markdown by mistake (though responseMimeType should prevent it)
             if (preg_match('/\{.*\}/s', $aiResponseText, $matches)) {
                 $aiResponseText = $matches[0];
             }
@@ -98,7 +195,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                 throw new Exception("AI-ul nu a returnat un format JSON valid sau datele lipsesc.");
             }
 
-            // 3. Save to Database
+            // 3. Generate Images using DeAPI
+            $imagePrompts = $aiData['image_prompts'] ?? [];
+            $images = [];
+            for ($i = 0; $i < 3; $i++) {
+                $prompt_text = $imagePrompts[$i] ?? "Futuristic background, cinematic, 8k";
+                $images[] = generateImage($prompt_text);
+            }
+
+            // 4. Save to Database
             $pdo->beginTransaction();
 
             $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags, image1, image2, image3) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)");
@@ -108,23 +213,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             $description = $aiData['description'] ?? '';
             $tags = $aiData['tags'] ?? '';
 
-            // Random images from picsum.photos as requested
-            $r1 = rand(1, 10000);
-            $r2 = rand(1, 10000);
-            $r3 = rand(1, 10000);
-            $img1 = "https://picsum.photos/800/450?random=" . $r1;
-            $img2 = "https://picsum.photos/800/450?random=" . $r2;
-            $img3 = "https://picsum.photos/800/450?random=" . $r3;
-
             $stmt->execute([
                 $user_id,
                 $title,
                 $script,
                 $description,
                 $tags,
-                $img1,
-                $img2,
-                $img3
+                $images[0],
+                $images[1],
+                $images[2]
             ]);
 
             $video_id = $pdo->lastInsertId();
@@ -286,7 +383,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                             <label for="idea">Ideea Video-ului</label>
                             <input type="text" name="idea" id="idea" placeholder="Ex: Cum să gătești paste" required>
                         </div>
-                        <button type="submit" class="btn-generate">Generează Plan (Gemini AI)</button>
+                        <button type="submit" class="btn-generate">Generează Plan (Gemini + DeAPI)</button>
                     </form>
                 </div>
             <?php endif; ?>
@@ -295,7 +392,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
 
     <div id="loading" class="loading-overlay">
         <div class="spinner"></div>
-        <p>Gemini AI gândește... Te rugăm să aștepți.</p>
+        <p>Gemini AI & DeAPI lucrează... <br>Acest proces poate dura până la 1 minut.</p>
     </div>
 
     <script>
