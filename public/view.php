@@ -27,6 +27,12 @@ if (!$video) {
     die("Acces Refuzat sau Video Inexistent.");
 }
 
+// Redirect drafts to edit_draft.php
+if ($video['status'] === 'draft') {
+    header("Location: edit_draft.php?id=" . $video_id);
+    exit;
+}
+
 ?>
 <!DOCTYPE html>
 <html lang="ro">
@@ -41,42 +47,6 @@ if (!$video) {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
             display: flex;
-        }
-
-        /* Sidebar */
-        .sidebar {
-            width: 250px;
-            background-color: #1e1e1e;
-            height: 100vh;
-            position: fixed;
-            padding: 2rem 1rem;
-            box-shadow: 2px 0 5px rgba(0,0,0,0.5);
-        }
-
-        .sidebar h2 {
-            color: #bb86fc;
-            margin-bottom: 2rem;
-            text-align: center;
-        }
-
-        .nav-link {
-            display: block;
-            padding: 0.75rem 1rem;
-            color: #e0e0e0;
-            text-decoration: none;
-            border-radius: 4px;
-            margin-bottom: 0.5rem;
-            transition: background 0.3s;
-        }
-
-        .nav-link:hover {
-            background-color: #2c2c2c;
-            color: #bb86fc;
-        }
-
-        .logout-link {
-            color: #cf6679;
-            margin-top: 2rem;
         }
 
         /* Main Content */
@@ -173,12 +143,7 @@ if (!$video) {
     </style>
 </head>
 <body>
-    <div class="sidebar">
-        <h2>Video AI</h2>
-        <a href="dashboard.php" class="nav-link">Dashboard</a>
-        <a href="generate.php" class="nav-link">Creează Video</a>
-        <a href="logout.php" class="nav-link logout-link">Logout</a>
-    </div>
+    <?php include __DIR__ . '/../views/header.php'; ?>
 
     <div class="main-content">
         <div class="container">
@@ -188,10 +153,16 @@ if (!$video) {
             </div>
 
             <div class="card">
-                <?php if ($video['status'] === 'pending'): ?>
+                <?php if ($video['status'] === 'pending' || $video['status'] === 'pending_production'): ?>
                     <div class="pending-box">
                         <div class="loader"></div>
-                        <div class="status-msg">Video-ul tău este încă în cuptorul AI. Revino în câteva momente!</div>
+                        <div class="status-msg">
+                            <?php if ($video['status'] === 'pending'): ?>
+                                Video-ul tău este încă în cuptorul AI. Revino în câteva momente!
+                            <?php else: ?>
+                                Slideshow-ul se generează acum. Aproape gata!
+                            <?php endif; ?>
+                        </div>
                         <a href="view.php?id=<?php echo $video['id']; ?>" class="btn btn-refresh">Refresh Page</a>
                     </div>
                 <?php elseif ($video['status'] === 'done'): ?>

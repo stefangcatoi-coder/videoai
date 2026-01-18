@@ -53,42 +53,6 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
             display: flex;
         }
 
-        /* Sidebar */
-        .sidebar {
-            width: 250px;
-            background-color: #1e1e1e;
-            height: 100vh;
-            position: fixed;
-            padding: 2rem 1rem;
-            box-shadow: 2px 0 5px rgba(0,0,0,0.5);
-        }
-
-        .sidebar h2 {
-            color: #bb86fc;
-            margin-bottom: 2rem;
-            text-align: center;
-        }
-
-        .nav-link {
-            display: block;
-            padding: 0.75rem 1rem;
-            color: #e0e0e0;
-            text-decoration: none;
-            border-radius: 4px;
-            margin-bottom: 0.5rem;
-            transition: background 0.3s;
-        }
-
-        .nav-link:hover, .nav-link.active {
-            background-color: #2c2c2c;
-            color: #bb86fc;
-        }
-
-        .logout-link {
-            color: #cf6679;
-            margin-top: 2rem;
-        }
-
         /* Main Content */
         .main-content {
             margin-left: 250px;
@@ -197,6 +161,18 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
             text-transform: uppercase;
         }
 
+        .status-draft {
+            background-color: rgba(224, 224, 224, 0.2);
+            color: #e0e0e0;
+            border: 1px solid #e0e0e0;
+        }
+
+        .status-pending_production {
+            background-color: rgba(3, 218, 198, 0.2);
+            color: #03dac6;
+            border: 1px solid #03dac6;
+        }
+
         .status-pending {
             background-color: rgba(255, 152, 0, 0.2);
             color: #ff9800;
@@ -219,12 +195,7 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
     </style>
 </head>
 <body>
-    <div class="sidebar">
-        <h2>Video AI</h2>
-        <a href="dashboard.php" class="nav-link active">Dashboard</a>
-        <a href="generate.php" class="nav-link">Creează Video</a>
-        <a href="logout.php" class="nav-link logout-link">Logout</a>
-    </div>
+    <?php include __DIR__ . '/../views/header.php'; ?>
 
     <div class="main-content">
         <?php if (isset($_GET['success'])): ?>
@@ -277,11 +248,22 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
                     <tbody>
                         <?php foreach ($videos as $video): ?>
                             <tr>
-                                <td><a href="view.php?id=<?php echo $video['id']; ?>" style="color: #bb86fc; text-decoration: none;"><strong><?php echo htmlspecialchars($video['title']); ?></strong></a></td>
+                                <td>
+                                    <?php if ($video['status'] === 'draft'): ?>
+                                        <a href="edit_draft.php?id=<?php echo $video['id']; ?>" style="color: #bb86fc; text-decoration: none;"><strong><?php echo htmlspecialchars($video['title']); ?></strong></a>
+                                    <?php else: ?>
+                                        <a href="view.php?id=<?php echo $video['id']; ?>" style="color: #bb86fc; text-decoration: none;"><strong><?php echo htmlspecialchars($video['title']); ?></strong></a>
+                                    <?php endif; ?>
+                                </td>
                                 <td><?php echo date('d.m.Y H:i', strtotime($video['created_at'])); ?></td>
                                 <td>
-                                    <?php if ($video['status'] === 'pending'): ?>
-                                        <span class="status-badge status-pending">În așteptare</span>
+                                    <?php if ($video['status'] === 'draft'): ?>
+                                        <span class="status-badge status-draft">Draft</span>
+                                    <?php elseif ($video['status'] === 'pending_production'): ?>
+                                        <span class="status-badge status-pending_production">În Producție</span>
+                                        <span class="ai-working">Slideshow-ul se creează...</span>
+                                    <?php elseif ($video['status'] === 'pending'): ?>
+                                        <span class="status-badge status-pending">Planificare AI</span>
                                         <span class="ai-working">AI-ul lucrează...</span>
                                     <?php elseif ($video['status'] === 'done'): ?>
                                         <span class="status-badge status-done">Finalizat</span>

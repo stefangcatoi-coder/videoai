@@ -33,31 +33,50 @@ $can_generate = ($user['videos_used'] < $user['monthly_limit']);
 
 // Processing Form Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
-    $title = $_POST['title'] ?? '';
-    $prompt = $_POST['prompt'] ?? '';
+    $idea = $_POST['idea'] ?? '';
 
-    if (!empty($title) && !empty($prompt)) {
+    if (!empty($idea)) {
         try {
             $pdo->beginTransaction();
 
-            // Insert new video
-            $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status) VALUES (?, ?, 'pending')");
-            $stmt->execute([$user_id, $title]);
+            // Insert new video as a Draft with placeholders
+            $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags, image1, image2, image3) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)");
 
-            // Increment videos_used
-            $stmt = $pdo->prepare("UPDATE users SET videos_used = videos_used + 1 WHERE id = ?");
-            $stmt->execute([$user_id]);
+            $placeholder_script = "Acesta este un script generat automat pentru: " . $idea;
+            $placeholder_desc = "Descriere generată pentru: " . $idea;
+            $placeholder_tags = "video, ai, " . strtolower(str_replace(' ', ', ', $idea));
+            $img1 = "https://placehold.co/600x400?text=Imagine+1";
+            $img2 = "https://placehold.co/600x400?text=Imagine+2";
+            $img3 = "https://placehold.co/600x400?text=Imagine+3";
+
+            $stmt->execute([
+                $user_id,
+                $idea,
+                $placeholder_script,
+                $placeholder_desc,
+                $placeholder_tags,
+                $img1,
+                $img2,
+                $img3
+            ]);
+
+            $video_id = $pdo->lastInsertId();
+
+            // We don't increment videos_used yet, only when they confirm the final generation?
+            // Actually, usually draft creation doesn't consume credits, but the user didn't specify.
+            // In the previous flow, generation incremented it.
+            // I'll leave it for the "Confirm" step in edit_draft.php to be more user-friendly.
 
             $pdo->commit();
 
-            header("Location: dashboard.php?success=Video-ul tău se procesează!");
+            header("Location: edit_draft.php?id=" . $video_id);
             exit;
         } catch (Exception $e) {
             $pdo->rollBack();
             $error = "A apărut o eroare la salvare: " . $e->getMessage();
         }
     } else {
-        $error = "Vă rugăm să completați toate câmpurile.";
+        $error = "Vă rugăm să introduceți ideea video-ului.";
     }
 }
 ?>
@@ -66,7 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Generează Video - Video AI</title>
+    <title>Planifică Video - Video AI</title>
     <style>
         body {
             background-color: #121212;
@@ -74,42 +93,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
             display: flex;
-        }
-
-        /* Sidebar (Same as Dashboard) */
-        .sidebar {
-            width: 250px;
-            background-color: #1e1e1e;
-            height: 100vh;
-            position: fixed;
-            padding: 2rem 1rem;
-            box-shadow: 2px 0 5px rgba(0,0,0,0.5);
-        }
-
-        .sidebar h2 {
-            color: #bb86fc;
-            margin-bottom: 2rem;
-            text-align: center;
-        }
-
-        .nav-link {
-            display: block;
-            padding: 0.75rem 1rem;
-            color: #e0e0e0;
-            text-decoration: none;
-            border-radius: 4px;
-            margin-bottom: 0.5rem;
-            transition: background 0.3s;
-        }
-
-        .nav-link:hover {
-            background-color: #2c2c2c;
-            color: #bb86fc;
-        }
-
-        .logout-link {
-            color: #cf6679;
-            margin-top: 2rem;
         }
 
         /* Main Content */
@@ -160,12 +143,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             font-size: 1rem;
         }
 
-        textarea {
-            height: 150px;
-            resize: vertical;
-        }
-
-        input:focus, textarea:focus {
+        input:focus {
             outline: none;
             border-color: #bb86fc;
         }
@@ -187,12 +165,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             background-color: #01b0a1;
         }
 
-        .btn-generate:disabled {
-            background-color: #555;
-            color: #888;
-            cursor: not-allowed;
-        }
-
         .error {
             color: #cf6679;
             background-color: rgba(207, 102, 121, 0.1);
@@ -201,24 +173,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             margin-bottom: 1.5rem;
             text-align: center;
         }
-
-        .info-box {
-            background-color: #2c2c2c;
-            padding: 1rem;
-            border-radius: 4px;
-            margin-bottom: 1.5rem;
-            text-align: center;
-            border-left: 4px solid #bb86fc;
-        }
     </style>
 </head>
 <body>
-    <div class="sidebar">
-        <h2>Video AI</h2>
-        <a href="dashboard.php" class="nav-link">Dashboard</a>
-        <a href="generate.php" class="nav-link active">Creează Video</a>
-        <a href="logout.php" class="nav-link logout-link">Logout</a>
-    </div>
+    <?php include __DIR__ . '/../views/header.php'; ?>
 
     <div class="main-content">
         <div class="container">
@@ -236,20 +194,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                         <div class="error"><?php echo htmlspecialchars($error); ?></div>
                     <?php endif; ?>
 
-                    <div class="info-box">
-                        Credite disponibile: <?php echo ($user['monthly_limit'] - $user['videos_used']); ?>
-                    </div>
-
                     <form method="POST">
                         <div class="form-group">
-                            <label for="title">Titlu Video</label>
-                            <input type="text" name="title" id="title" placeholder="Ex: Cum să gătești paste" required>
+                            <label for="idea">Ideea Video-ului</label>
+                            <input type="text" name="idea" id="idea" placeholder="Ex: Cum să gătești paste" required>
                         </div>
-                        <div class="form-group">
-                            <label for="prompt">Script / Prompt Video</label>
-                            <textarea name="prompt" id="prompt" placeholder="Descrie în detaliu ce vrei să conțină video-ul tău..." required></textarea>
-                        </div>
-                        <button type="submit" class="btn-generate">Generează Video</button>
+                        <button type="submit" class="btn-generate">Planifică Video</button>
                     </form>
                 </div>
             <?php endif; ?>
