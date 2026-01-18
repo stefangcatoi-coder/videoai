@@ -40,14 +40,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
         try {
             // 1. Prepare Prompt for Gemini
             $prompt = "Generează un plan video pentru ideea: \"$idea\".
-            Răspunsul tău TREBUIE să fie un obiect JSON pur, fără marcaje markdown sau alte explicații, strict în limba română (cu excepția tag-urilor și a image_prompts dacă e cazul), cu următoarele câmpuri:
+            Răspunsul tău TREBUIE să fie un obiect JSON pur, FĂRĂ MARCAJE MARKDOWN (fără ```json), fără alte explicații, strict în limba română (cu excepția tag-urilor și a image_prompts dacă e cazul), cu următoarele câmpuri:
             - title: Un titlu atractiv.
             - script: Un text de exact 50-60 de cuvinte (pentru aproximativ 30 secunde de voce).
             - description: O descriere pentru social media.
             - tags: O listă cu 5 etichete relevante separate prin virgulă.
             - image_prompts: Un array cu 3 descrieri vizuale scurte (în engleză) pentru un generator de imagini AI.
 
-            Exemplu format cerut:
+            Exemplu format cerut (doar JSON pur):
             {
               \"title\": \"Titlu\",
               \"script\": \"Textul scriptului aici...\",
