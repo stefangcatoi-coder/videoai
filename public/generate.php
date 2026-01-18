@@ -44,7 +44,8 @@ function generateAndDownloadImage($prompt, $videoId, $index) {
         "model" => "Flux1schnell",
         "width" => 1080,
         "height" => 1920,
-        "seed" => rand(1, 99999999)
+        "seed" => rand(1, 99999999),
+        "steps" => 4
     ];
 
     $ch = curl_init($url);
