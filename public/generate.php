@@ -34,26 +34,30 @@ $can_generate = ($user['videos_used'] < $user['monthly_limit']);
 
 // Processing Form Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
-    $idea = $_POST['idea'] ?? '';
+    $idea = trim($_POST['idea'] ?? '');
 
     if (!empty($idea)) {
-        try {
-            // 1. Prepare Prompt for Gemini (Strictly JSON, no markdown)
-            $prompt = "Generează un plan video pentru ideea: \"$idea\".
-            Răspunsul tău TREBUIE să fie un obiect JSON pur, FĂRĂ MARCAJE MARKDOWN (fără ```json), fără nicio altă explicație în plus, strict în limba română (cu excepția tag-urilor și a image_prompts), cu următoarele câmpuri:
-            - title: Un titlu atractiv.
-            - script: Un text de exact 50-60 de cuvinte (pentru aproximativ 30 secunde de voce).
-            - description: O descriere pentru social media.
-            - tags: O listă cu 5 etichete relevante separate prin virgulă.
-            - image_prompts: Un array cu 3 descrieri vizuale scurte (în engleză) pentru un generator de imagini AI.
+        if (strlen($idea) > 500) {
+            $error = "Ideea este prea lungă (maxim 500 caractere).";
+        } else {
+            try {
+            // 1. Prepare Prompt for Gemini (SEO Optimized, Strictly JSON, no markdown)
+            $prompt = "Generează un plan video profesional și optimizat SEO pentru ideea: \"$idea\".
+            Răspunsul tău TREBUIE să fie un obiect JSON pur, FĂRĂ MARCAJE MARKDOWN (fără ```json), fără nicio altă explicație în plus, strict în limba română (cu excepția image_prompts), cu următoarele câmpuri:
+
+            - title: Un titlu captivant care să includă cuvinte cheie de tip 'Hook' (cârlig) pentru a atrage click-uri.
+            - script: Un text de exact 50-60 de cuvinte, optimizat pentru retenție: începe cu o întrebare intrigantă, oferă informație utilă la mijloc și încheie cu un îndemn clar de abonare.
+            - description: O descriere optimizată SEO care să respecte structura: o introducere captivantă, 3 puncte cheie (bullet points) despre subiect și un Call to Action (CTA) final.
+            - tags: O listă de 15-20 de etichete relevante, separate prin virgulă, incluzând atât cuvinte cheie generale, cât și 'long-tail keywords' specifice.
+            - image_prompts: Un array cu 3 descrieri vizuale scurte, EXCLUSIV ÎN LIMBA ENGLEZĂ, pentru un generator de imagini AI.
 
             Exemplu format cerut (strict JSON):
             {
-              \"title\": \"Titlu\",
-              \"script\": \"Textul scriptului aici...\",
-              \"description\": \"Descriere aici...\",
-              \"tags\": \"tag1, tag2, tag3, tag4, tag5\",
-              \"image_prompts\": [\"prompt 1\", \"prompt 2\", \"prompt 3\"]
+              \"title\": \"[HOOK] Titlu Optimizat\",
+              \"script\": \"Vrei să afli cum...? [Informație]. Abonează-te pentru mai multe!\",
+              \"description\": \"Intro... \n• Punct 1 \n• Punct 2 \n• Punct 3 \n\n Acționează acum!\",
+              \"tags\": \"cuvânt1, cuvânt specific, long tail keyword...\",
+              \"image_prompts\": [\"visual prompt 1\", \"visual prompt 2\", \"visual prompt 3\"]
             }";
 
             // 2. Call Gemini API (Latest 2026 standards)
@@ -75,6 +79,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
             curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Bypass SSL verification for VPS
+            curl_setopt($ch, CURLOPT_TIMEOUT, 30); // 30 seconds timeout
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10); // 10 seconds connection timeout
 
             $response = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -138,6 +144,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
         } catch (Exception $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             $error = $e->getMessage();
+        }
         }
     } else {
         $error = "Vă rugăm să introduceți ideea video-ului.";
@@ -286,7 +293,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                     <form method="POST" id="genForm">
                         <div class="form-group">
                             <label for="idea">Ideea Video-ului</label>
-                            <input type="text" name="idea" id="idea" placeholder="Ex: Cum să gătești paste" required>
+                            <input type="text" name="idea" id="idea" placeholder="Ex: Cum să gătești paste" maxlength="500" required>
                         </div>
                         <button type="submit" class="btn-generate">Generează Plan (Gemini AI)</button>
                     </form>
