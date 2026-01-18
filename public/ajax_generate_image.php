@@ -63,6 +63,11 @@ try {
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
+        if ($httpCode === 429) {
+            echo json_encode(['success' => false, 'isRateLimited' => true, 'error' => 'Rate limit la inițiere.']);
+            exit;
+        }
+
         if ($httpCode !== 200) {
             file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "Action Initiate Error ($httpCode): " . $response . "\n", FILE_APPEND);
             throw new Exception("Eroare DeAPI (HTTP $httpCode).");
@@ -90,6 +95,11 @@ try {
         $statusRes = curl_exec($ch);
         $statusHttp = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+
+        if ($statusHttp === 429) {
+            echo json_encode(['success' => false, 'isRateLimited' => true, 'error' => 'Too Many Requests']);
+            exit;
+        }
 
         if ($statusHttp !== 200) {
             file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "Action Poll Error ($statusHttp) for ID $requestId: " . $statusRes . "\n", FILE_APPEND);

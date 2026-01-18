@@ -204,11 +204,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
 
         try {
             // Step 1: Initiate
-            updateStatus("Inițiere...");
-            const initRes = await fetch(`ajax_generate_image.php?action=initiate&video_id=${videoId}&index=${index}`);
-            const initData = await initRes.json();
+            let initData;
+            let initAttempts = 0;
+            while (initAttempts < 5) {
+                updateStatus("Inițiere...");
+                const initRes = await fetch(`ajax_generate_image.php?action=initiate&video_id=${videoId}&index=${index}`);
+                initData = await initRes.json();
 
-            if (!initData.success) throw new Error(initData.error || "Eroare la inițiere.");
+                if (initData.success) break;
+
+                if (initData.isRateLimited) {
+                    initAttempts++;
+                    updateStatus(`Limită inițiere... (${initAttempts})`);
+                    await new Promise(r => setTimeout(r, 10000));
+                    continue;
+                }
+                throw new Error(initData.error || "Eroare la inițiere.");
+            }
+
+            if (!initData || !initData.success) throw new Error("Nu s-a putut iniția generarea.");
 
             let imgUrl = initData.imgUrl;
             let requestId = initData.requestId;
@@ -217,15 +231,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
             if (!imgUrl && requestId) {
                 let completed = false;
                 let attempts = 0;
-                while (!completed && attempts < 60) {
+                let waitTime = 8000; // Start with 8 seconds
+                while (!completed && attempts < 40) {
                     attempts++;
                     updateStatus(`Generare... (${attempts})`);
-                    await new Promise(r => setTimeout(r, 4000));
+                    await new Promise(r => setTimeout(r, waitTime));
 
                     const pollRes = await fetch(`ajax_generate_image.php?action=poll&requestId=${requestId}`);
                     const pollData = await pollRes.json();
 
-                    if (!pollData.success) throw new Error(pollData.error || "Eroare la verificare.");
+                    if (!pollData.success) {
+                        if (pollData.isRateLimited) {
+                            updateStatus("Limită atinsă, încetinim...");
+                            waitTime += 5000; // Increase wait time by 5s on 429
+                            continue;
+                        }
+                        throw new Error(pollData.error || "Eroare la verificare.");
+                    }
 
                     if (pollData.completed) {
                         imgUrl = pollData.imgUrl;
