@@ -56,9 +56,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
               \"image_prompts\": [\"prompt 1\", \"prompt 2\", \"prompt 3\"]
             }";
 
-            // 2. Call Gemini API
+            // 2. Call Gemini API (Strictly following latest documentation)
             $apiKey = GEMINI_API_KEY;
-            $url = GEMINI_API_URL . "?key=" . $apiKey;
+            $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" . $apiKey;
 
             $payload = [
                 "contents" => [
@@ -67,17 +67,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                             ["text" => $prompt]
                         ]
                     ]
-                ],
-                "generationConfig" => [
-                    "responseMimeType" => "application/json"
                 ]
             ];
 
             $ch = curl_init($url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
             curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
 
             $response = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
