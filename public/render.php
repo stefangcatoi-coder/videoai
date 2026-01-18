@@ -116,7 +116,7 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 
         $assHeader = "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n";
         $assHeader .= "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n";
-        $assHeader .= "Style: Default,Arial,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,5,10,10,10,1\n\n";
+        $assHeader .= "Style: Default,Sans,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,5,10,10,10,1\n\n";
         $assHeader .= "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
 
         $events = "";
@@ -156,8 +156,19 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     $filter .= "[v1][v2][v3]concat=n=3:v=1:a=0[vbase]";
 
     if ($useAss) {
-        $filter .= "; [vbase]subtitles=" . escapeshellarg($assFile) . ":fontsdir=" . escapeshellarg(dirname($fontPath)) . "[vfinal]";
-        $lastLabel = "vfinal";
+        if (!file_exists($assFile)) {
+            file_put_contents(__DIR__ . '/../storage/debug_render.log', "Error: ASS file missing at $assFile\n", FILE_APPEND);
+            $useAss = false;
+            $lastLabel = "vbase";
+        } else {
+            // Pentru FFmpeg subtitles filter, calea trebuie să aibă backslash-uri dublate și coloane escapate
+            $escapedAssPath = str_replace('\\', '\\\\', $assFile);
+            $escapedAssPath = str_replace(':', '\\:', $escapedAssPath);
+            $escapedAssPath = str_replace("'", "'\\''", $escapedAssPath);
+
+            $filter .= "; [vbase]subtitles='" . $escapedAssPath . "'[vfinal]";
+            $lastLabel = "vfinal";
+        }
     } else {
         $lastLabel = "vbase";
     }
@@ -174,13 +185,14 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         "-loop 1 -t $img_duration -i " . escapeshellarg($img3) . " " .
         "-i " . escapeshellarg($audio) . " " .
         "-filter_complex " . escapeshellarg($filter) . " " .
-        "-map \"[$lastLabel]\" -map 3:a -c:v libx264 -pix_fmt yuv420p -preset faster -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path) . " 2>&1";
+        "-map \"[$lastLabel]\" -map 3:a -c:v libx264 -pix_fmt yuv420p -preset faster -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path);
 
-    exec($ffmpeg_cmd, $output, $return_var);
+    // Capturăm output-ul complet pentru debug conform cerinței
+    $full_output = shell_exec("$ffmpeg_cmd 2>&1");
+    file_put_contents(__DIR__ . '/../storage/debug_render.log', "CMD: $ffmpeg_cmd\n\nOUTPUT:\n" . $full_output);
 
-    if ($return_var !== 0) {
-        file_put_contents(__DIR__ . '/../storage/debug_ffmpeg.log', "CMD: $ffmpeg_cmd\n\nOUTPUT:\n" . implode("\n", $output));
-        echo "<p style='color: red;'>Eroare FFmpeg. Verifică storage/debug_ffmpeg.log.</p>";
+    if (!file_exists($output_path) || filesize($output_path) < 1000) {
+        echo "<p style='color: red;'>Eroare FFmpeg. Verifică storage/debug_render.log pentru detalii.</p>";
         exit;
     }
 
