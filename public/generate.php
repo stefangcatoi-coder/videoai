@@ -36,15 +36,14 @@ $can_generate = ($user['videos_used'] < $user['monthly_limit']);
 
 // Helper function to generate and download image via DeAPI.ai
 function generateAndDownloadImage($prompt, $videoId, $index) {
-    $apiKey = DEAPI_API_KEY;
+    $apiKey = trim(DEAPI_API_KEY);
     $url = DEAPI_API_URL;
 
     $payload = [
         "prompt" => $prompt,
-        "model" => "flux", // or sdxl
+        "model" => "flux",
         "width" => 1080,
-        "height" => 1920,
-        "steps" => 30
+        "height" => 1920
     ];
 
     $ch = curl_init($url);
@@ -65,27 +64,33 @@ function generateAndDownloadImage($prompt, $videoId, $index) {
     if ($httpCode !== 200) {
         // Fallback or Log
         file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "HTTP $httpCode: " . $response . "\n", FILE_APPEND);
-        return "https://picsum.photos/1080/1920?random=" . rand(1, 9999); // Fallback to Picsum if API fails
+        throw new Exception("Eroare DeAPI (HTTP $httpCode). Verifică storage/debug_deapi.log.");
     }
 
     $result = json_decode($response, true);
-    // Assuming 'data', 'url', or 'output' contains the image URL based on common API patterns
+    // Assuming 'data', 'url', or 'output' contains the image URL
     $imgUrl = $result['data'][0]['url'] ?? $result['url'] ?? $result['output'][0] ?? '';
 
-    if (empty($imgUrl)) return "https://picsum.photos/1080/1920?random=" . rand(1, 9999);
+    if (empty($imgUrl)) {
+        throw new Exception("DeAPI nu a returnat un URL valid pentru imagine.");
+    }
 
     // Download local
     $imgData = file_get_contents($imgUrl);
-    if ($imgData === false) return $imgUrl;
+    if ($imgData === false) {
+        throw new Exception("Nu am putut descărca imaginea de la URL: " . $imgUrl);
+    }
 
     $filename = "img_" . $videoId . "_" . $index . "_" . time() . ".jpg";
-    $dir = __DIR__ . "/uploads/images/";
+    $relative_path = "uploads/images/" . $filename;
+    $absolute_path = __DIR__ . "/" . $relative_path;
+
+    $dir = dirname($absolute_path);
     if (!is_dir($dir)) mkdir($dir, 0775, true);
 
-    $path = $dir . $filename;
-    file_put_contents($path, $imgData);
+    file_put_contents($absolute_path, $imgData);
 
-    return "uploads/images/" . $filename;
+    return $relative_path;
 }
 
 // Processing Form Submission
