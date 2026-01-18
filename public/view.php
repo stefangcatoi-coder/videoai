@@ -149,11 +149,7 @@ if (!$video) {
             display: flex;
             align-items: center;
             justify-content: center;
-        }
-
-        video {
-            width: 100%;
-            height: 100%;
+            border: 1px solid #333;
         }
 
         .pending-box {
@@ -188,7 +184,7 @@ if (!$video) {
         <div class="container">
             <div class="header-box">
                 <h1><?php echo htmlspecialchars($video['title']); ?></h1>
-                <a href="dashboard.php" class="btn btn-back">← Dashboard</a>
+                <a href="dashboard.php" class="btn btn-back">← Înapoi la Dashboard</a>
             </div>
 
             <div class="card">
@@ -201,7 +197,7 @@ if (!$video) {
                 <?php elseif ($video['status'] === 'done'): ?>
                     <div class="status-msg" style="color: #03dac6;">Video-ul a fost generat cu succes!</div>
                     <div class="video-container">
-                        <video controls>
+                        <video width="100%" controls>
                             <source src="https://www.w3schools.com/html/mov_bbb.mp4" type="video/mp4">
                             Browser-ul tău nu suportă tag-ul video.
                         </video>
