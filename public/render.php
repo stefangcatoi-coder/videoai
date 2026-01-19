@@ -157,10 +157,12 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     }
 
     // 5. Build Filter Complex
-    // Slideshow part - Optimized scaling to avoid "too big/small" errors
-    $filter = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v1]; ";
-    $filter .= "[1:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v2]; ";
-    $filter .= "[2:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,trim=duration=$img_duration,setpts=PTS-STARTPTS[v3]; ";
+    // Slideshow part with Slow Zoom (Ken Burns) effect
+    $zoompan_d = round($img_duration * 25); // frames at 25fps
+
+    $filter = "[0:v]scale=2500:-1,setsar=1,zoompan=z='min(zoom+0.0015,1.5)':d=$zoompan_d:s=1080x1920:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25[v1]; ";
+    $filter .= "[1:v]scale=2500:-1,setsar=1,zoompan=z='min(zoom+0.0015,1.5)':d=$zoompan_d:s=1080x1920:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25[v2]; ";
+    $filter .= "[2:v]scale=2500:-1,setsar=1,zoompan=z='min(zoom+0.0015,1.5)':d=$zoompan_d:s=1080x1920:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25[v3]; ";
     $filter .= "[v1][v2][v3]concat=n=3:v=1:a=0[vbase]";
 
     if ($useAss) {
