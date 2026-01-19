@@ -210,7 +210,23 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         exit;
     }
 
-    // 6. Update Database
+    // 6. Cleanup Logic (Post-Procesare)
+    $filesToDelete = [$img1, $img2, $img3, $jsonOutput, $assFile];
+    $deletedCount = 0;
+    foreach ($filesToDelete as $f) {
+        if (!empty($f) && strpos($f, 'http') !== 0 && file_exists($f)) {
+            if (unlink($f)) $deletedCount++;
+        }
+    }
+
+    // Logging cleanup status
+    $logDir = __DIR__ . '/../storage/logs';
+    if (!is_dir($logDir)) @mkdir($logDir, 0775, true);
+    $freeSpace = round(@disk_free_space("/") / (1024 * 1024 * 1024), 2);
+    $cleanupLog = "[" . date('Y-m-d H:i:s') . "] Video ID [$video_id] terminat. $deletedCount fișiere șterse, {$freeSpace}GB spațiu verificat\n";
+    @file_put_contents($logDir . '/cleanup.log', $cleanupLog, FILE_APPEND);
+
+    // 7. Update Database
     $stmt = $pdo->prepare("UPDATE videos SET status = 'done', video_path = ? WHERE id = ?");
     $stmt->execute([$relative_video_path, $video_id]);
 
