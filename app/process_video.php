@@ -22,97 +22,107 @@ try {
     ];
     $assColor = $colorMap[$video['subtitle_color']] ?? '&HFFFFFF';
 
-    $totalDuration = 0.0;
-    $allAssDialogue = "";
     $combinedAudioBinary = "";
 
-    // 2. Sequential in-memory processing
+    // 2. TTS Generation (Segment by Segment to memory)
     foreach ($segments as $index => $segmentText) {
         $cleanText = trim(preg_replace('/\[SEGMENT \d+\]/', '', $segmentText));
+        $cleanText = str_replace(["\r", "\n"], " ", $cleanText);
+        $cleanText = preg_replace('/[^\p{L}\p{N}\s\p{P}]/u', '', $cleanText);
+        $cleanText = preg_replace('/\s+/', ' ', $cleanText);
+        $cleanText = trim($cleanText);
 
-        // a. TTS via Speechify -> memory
-        $apiKey = SPEECHIFY_API_KEY;
-        $url = SPEECHIFY_API_URL;
-        $payload = [
-            "input" => $cleanText, "voice_id" => "george", "language" => "ro-RO",
-            "audio_format" => "mp3", "model" => "simba-multilingual"
-        ];
+        if (empty($cleanText)) continue;
 
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Bearer $apiKey", "Content-Type: application/json"]);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 120);
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($httpCode !== 200) throw new Exception("Speechify Error $httpCode: $response");
-
-        $result = json_decode($response, true);
-        $audio_binary = base64_decode($result['audio_data'] ?? '');
-
-        // b. Whisper Transcription -> memory via Python Bridge
-        $descriptorspec = [
-           0 => ["pipe", "r"], // stdin
-           1 => ["pipe", "w"], // stdout
-           2 => ["pipe", "w"]  // stderr
-        ];
-        $process = proc_open("python3 " . __DIR__ . "/whisper_worker.py", $descriptorspec, $pipes);
-        if (is_resource($process)) {
-            fwrite($pipes[0], $audio_binary);
-            fclose($pipes[0]);
-            $json_output = stream_get_contents($pipes[1]);
-            $stderr_output = stream_get_contents($pipes[2]);
-            fclose($pipes[1]);
-            fclose($pipes[2]);
-            $return_value = proc_close($process);
-            if ($return_value !== 0) throw new Exception("Whisper bridge failed: $stderr_output");
-        } else {
-            throw new Exception("Could not start whisper worker.");
+        // Speechify Chunking
+        $chunks = [];
+        $tempText = $cleanText;
+        $maxLength = 3000;
+        while (mb_strlen($tempText, 'UTF-8') > $maxLength) {
+            $chunkPart = mb_substr($tempText, 0, $maxLength, 'UTF-8');
+            $cutPos = mb_strrpos($chunkPart, '.', 0, 'UTF-8');
+            if ($cutPos === false) $cutPos = mb_strrpos($chunkPart, ' ', 0, 'UTF-8');
+            if ($cutPos === false) $cutPos = $maxLength;
+            $chunks[] = mb_substr($tempText, 0, $cutPos + 1, 'UTF-8');
+            $tempText = trim(mb_substr($tempText, $cutPos + 1, NULL, 'UTF-8'));
         }
+        if (!empty($tempText)) $chunks[] = $tempText;
 
-        $transcript = json_decode($json_output, true);
+        foreach ($chunks as $chunkIdx => $chunk) {
+            $apiKey = trim(SPEECHIFY_API_KEY);
+            if (strpos($apiKey, 'Bearer ') === 0) $apiKey = substr($apiKey, 7);
 
-        // c. Generate ASS Dialogue lines -> memory
-        if (isset($transcript['segments'])) {
-            foreach ($transcript['segments'] as $s) {
-                if (isset($s['words'])) {
-                    foreach ($s['words'] as $w) {
-                        $start = formatAssTime($w['start'] + $totalDuration);
-                        $end = formatAssTime($w['end'] + $totalDuration);
-                        $text = trim($w['word']);
-                        $allAssDialogue .= "Dialogue: 0,$start,$end,Default,,0,0,0,,$text\n";
-                    }
+            $url = SPEECHIFY_API_URL;
+            $payload = [
+                "input" => $chunk,
+                "voice_id" => "george",
+                "language" => ($video['language'] === 'en' ? "en-US" : "ro-RO"),
+                "audio_format" => "mp3",
+                "model" => "simba-multilingual"
+            ];
+
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Bearer $apiKey", "Content-Type: application/json"]);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode !== 200) {
+                file_put_contents(__DIR__ . '/../storage/debug_speechify.log', "HTTP $httpCode Response: $response\n", FILE_APPEND);
+                throw new Exception("Speechify Error $httpCode");
+            }
+
+            $result = json_decode($response, true);
+            $combinedAudioBinary .= base64_decode($result['audio_data'] ?? '');
+        }
+    }
+
+    if (empty($combinedAudioBinary)) throw new Exception("Audio generation failed (empty).");
+
+    // 3. Whisper Transcription (Load model once for combined audio)
+    $descriptorspec = [0 => ["pipe", "r"], 1 => ["pipe", "w"], 2 => ["pipe", "w"]];
+    $process = proc_open("python3 " . __DIR__ . "/whisper_worker.py", $descriptorspec, $pipes);
+    if (is_resource($process)) {
+        fwrite($pipes[0], $combinedAudioBinary);
+        fclose($pipes[0]);
+        $json_output = stream_get_contents($pipes[1]);
+        $stderr_output = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $return_value = proc_close($process);
+        if ($return_value !== 0) throw new Exception("Whisper failed: $stderr_output");
+    } else {
+        throw new Exception("Could not start whisper worker.");
+    }
+
+    $transcript = json_decode($json_output, true);
+    $allAssDialogue = "";
+    if (isset($transcript['segments'])) {
+        foreach ($transcript['segments'] as $s) {
+            if (isset($s['words'])) {
+                foreach ($s['words'] as $w) {
+                    $start = formatAssTime($w['start']);
+                    $end = formatAssTime($w['end']);
+                    $text = trim($w['word']);
+                    $allAssDialogue .= "Dialogue: 0,$start,$end,Default,,0,0,0,,$text\n";
                 }
             }
         }
-
-        // d. Calculate segment duration via ffprobe (using pipe)
-        $descriptorspec = [
-           0 => ["pipe", "r"],
-           1 => ["pipe", "w"],
-           2 => ["pipe", "w"]
-        ];
-        $process = proc_open("ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 pipe:0", $descriptorspec, $pipes);
-        fwrite($pipes[0], $audio_binary);
-        fclose($pipes[0]);
-        $seg_duration = (float)stream_get_contents($pipes[1]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        proc_close($process);
-
-        $totalDuration += $seg_duration;
-        $combinedAudioBinary .= $audio_binary;
     }
 
-    // 3. Save combined final audio (Product, not temp file)
-    $final_audio_filename = "voiceover_" . $video_id . "_" . time() . ".mp3";
-    $final_audio_path = __DIR__ . "/../public/uploads/audio/" . $final_audio_filename;
-    if (!is_dir(dirname($final_audio_path))) mkdir(dirname($final_audio_path), 0775, true);
-    file_put_contents($final_audio_path, $combinedAudioBinary);
+    // Get total duration via ffprobe from memory
+    $descriptorspec = [0 => ["pipe", "r"], 1 => ["pipe", "w"], 2 => ["pipe", "w"]];
+    $process = proc_open("ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 pipe:0", $descriptorspec, $pipes);
+    fwrite($pipes[0], $combinedAudioBinary);
+    fclose($pipes[0]);
+    $totalDuration = (float)stream_get_contents($pipes[1]);
+    fclose($pipes[1]); fclose($pipes[2]);
+    proc_close($process);
 
     // 4. Construct Final ASS -> memory
     $ass_header = "[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\n\n";
@@ -122,9 +132,13 @@ try {
     $final_ass_content = $ass_header . $allAssDialogue;
 
     // 5. Final Rendering Stage (Landscape 16:9)
-    $images = json_decode($video['assets_json'], true) ?: [$video['image1'], $video['image2'], $video['image3']];
+    $assets_json_data = json_decode($video['assets_json'], true) ?: [];
+    $images = [];
+    foreach ($assets_json_data as $a) { if (!empty($a['path'])) $images[] = $a['path']; }
+    if (empty($images)) $images = [$video['image1'], $video['image2'], $video['image3']];
+
     $num_images = count($images);
-    $img_duration = $totalDuration / $num_images;
+    $img_duration = $totalDuration / max(1, $num_images);
     $zoompan_d = round($img_duration * 25);
 
     $output_filename = "video_" . $video_id . "_" . time() . ".mp4";
@@ -136,43 +150,40 @@ try {
     $filter_complex = "";
     foreach ($images as $i => $img) {
         $abs_img = __DIR__ . "/../public/" . $img;
+        if (!file_exists($abs_img)) $abs_img = "https://via.placeholder.com/1920x1080.png/222222/FFFFFF?text=Imagine+Indisponibila";
         $input_images .= "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($abs_img) . " ";
         $filter_complex .= "[$i:v]scale=1920:-1,crop=1920:1080,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080[v$i]; ";
     }
     for ($i = 0; $i < $num_images; $i++) $filter_complex .= "[v$i]";
     $filter_complex .= "concat=n=$num_images:v=1:a=0[vcat]; ";
-
-    // Pass subtitles via pipe:3 and specify it in filter
     $filter_complex .= "[vcat]subtitles=/dev/fd/3[v]";
 
-    $ffmpeg_cmd = "ffmpeg -y $input_images -i " . escapeshellarg($final_audio_path) . " " .
+    // FFmpeg takes audio from pipe:0
+    $ffmpeg_cmd = "ffmpeg -y $input_images -i pipe:0 " .
         "-filter_complex \"$filter_complex\" " .
         "-map \"[v]\" -map $num_images:a -c:v libx264 -pix_fmt yuv420p -preset fast -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path);
 
     $descriptorspec = [
-       0 => ["pipe", "r"], // stdin
-       1 => ["pipe", "w"], // stdout
-       2 => ["pipe", "w"], // stderr
-       3 => ["pipe", "r"]  // extra pipe for subtitles
+       0 => ["pipe", "r"], // Audio pipe
+       1 => ["pipe", "w"],
+       2 => ["pipe", "w"],
+       3 => ["pipe", "r"]  // Subtitles pipe
     ];
     $process = proc_open($ffmpeg_cmd, $descriptorspec, $pipes);
     if (is_resource($process)) {
-        // Write subtitles to pipe 3
         fwrite($pipes[3], $final_ass_content);
         fclose($pipes[3]);
-
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
+        fwrite($pipes[0], $combinedAudioBinary);
         fclose($pipes[0]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[1]); fclose($pipes[2]);
         $ret = proc_close($process);
         if ($ret !== 0) throw new Exception("FFmpeg failed: $stderr");
     }
 
     // 6. Update Database
-    $stmt = $pdo->prepare("UPDATE videos SET status = 'ready_for_render', voiceover_path = ?, video_path = ? WHERE id = ?");
-    $stmt->execute(["uploads/audio/" . $final_audio_filename, $relative_video_path, $video_id]);
+    $stmt = $pdo->prepare("UPDATE videos SET status = 'ready_for_render', video_path = ? WHERE id = ?");
+    $stmt->execute([$relative_video_path, $video_id]);
 
 } catch (Exception $e) {
     file_put_contents(__DIR__ . '/../storage/process_error.log', "Global Error: " . $e->getMessage() . "\n", FILE_APPEND);

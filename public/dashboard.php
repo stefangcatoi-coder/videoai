@@ -3,8 +3,6 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
-// /var/www/video-ai/public/dashboard.php
-
 session_start();
 
 // Security Middleware: Redirect to login if not authenticated
