@@ -42,14 +42,13 @@ $error = '';
 
 // Handle Production Request (Speechify Integration)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
+    set_time_limit(1200); // 20 minutes for long voice generation
     $new_title = $_POST['title'] ?? $video['title'];
     $new_script = $_POST['script'] ?? $video['script'];
     $new_description = $_POST['description'] ?? $video['description'];
     $new_tags = $_POST['tags'] ?? $video['tags'];
 
     try {
-        $pdo->beginTransaction();
-
         // 1. Check user limits
         $stmt_user = $pdo->prepare("SELECT monthly_limit, videos_used FROM users WHERE id = ?");
         $stmt_user->execute([$user_id]);
@@ -62,6 +61,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
         // 2. Save changes locally
         $stmt_update = $pdo->prepare("UPDATE videos SET title = ?, script = ?, description = ?, tags = ? WHERE id = ?");
         $stmt_update->execute([$new_title, $new_script, $new_description, $new_tags, $video_id]);
+
+        // --- Start of Keep-Alive Page ---
+        ?>
+        <!DOCTYPE html>
+        <html lang="ro">
+        <head>
+            <meta charset="UTF-8">
+            <title>Generare Voce - Video AI</title>
+            <style>
+                body { background-color: #121212; color: #fff; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; flex-direction: column; text-align: center; }
+                .loader { border: 5px solid #333; border-top: 5px solid #03dac6; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 20px; }
+                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                h2 { background: linear-gradient(45deg, #bb86fc, #03dac6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+            </style>
+        </head>
+        <body>
+            <div class="loader"></div>
+            <h2>Generăm Vocea AI...</h2>
+            <p>Procesăm script-ul tău în bucăți de înaltă calitate. <br>Acest lucru previne erorile de timeout pentru script-uri lungi.</p>
+            <?php
+            if (ob_get_level()) ob_end_flush();
+            flush();
+            // --- End of Keep-Alive Page ---
+
+        $pdo->beginTransaction();
 
         // 3. Call Speechify API for Voiceover (with Chunking for long scripts)
         $apiKey = trim(SPEECHIFY_API_KEY);
@@ -99,7 +123,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
         if (!empty($tempText)) $chunks[] = $tempText;
 
         $audio_content = "";
-        foreach ($chunks as $chunk) {
+        foreach ($chunks as $idx => $chunk) {
+            echo "<!-- Processing chunk " . ($idx+1) . " -->";
+            flush();
+
             $payload = [
                 "input" => $chunk,
                 "voice_id" => "george",
@@ -164,8 +191,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
 
         $pdo->commit();
 
-        // 7. Redirect to render.php
-        header("Location: render.php?id=" . $video_id);
+        // 7. Redirect to render.php via JS (since we already sent HTML)
+        echo "<script>window.location.href = 'render.php?id=" . $video_id . "';</script>";
         exit;
 
     } catch (Exception $e) {

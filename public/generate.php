@@ -114,6 +114,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
 
     if (!empty($idea)) {
         try {
+            // --- Start of Keep-Alive Page ---
+            ?>
+            <!DOCTYPE html>
+            <html lang="ro">
+            <head>
+                <meta charset="UTF-8">
+                <title>Generare Plan Video - Video AI</title>
+                <style>
+                    body { background-color: #121212; color: #fff; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; flex-direction: column; text-align: center; }
+                    .loader { border: 5px solid #333; border-top: 5px solid #03dac6; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 20px; }
+                    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                    h2 { background: linear-gradient(45deg, #bb86fc, #03dac6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+                </style>
+            </head>
+            <body>
+                <div class="loader"></div>
+                <h2>Planificăm Video-ul tău...</h2>
+                <p>Gemini și motoarele de căutare stock lucrează acum. <br>Acest proces poate dura câteva minute pentru video-uri lungi.</p>
+                <?php
+                if (ob_get_level()) ob_end_flush();
+                flush();
+                // --- End of Keep-Alive Page ---
+
             // 1. Prepare Prompt for Gemini
             $langName = ($language === 'en') ? 'English' : 'Romanian';
             $orientation = ($video_type === 'short') ? 'portrait (9:16)' : 'landscape (16:9)';
@@ -188,6 +211,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             $imgOrientation = ($video_type === 'short') ? 'portrait' : 'landscape';
 
             foreach ($keywords as $idx => $kw) {
+                echo "<!-- Fetching image " . ($idx+1) . " -->";
+                flush();
                 $path = getAutoImage($kw, $idx + 1, $imgOrientation);
                 $assets[] = ['path' => $path, 'keyword' => $kw];
             }
@@ -220,7 +245,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             $video_id = $pdo->lastInsertId();
             $pdo->commit();
 
-            header("Location: edit_draft.php?id=" . $video_id);
+            echo "<script>window.location.href = 'edit_draft.php?id=" . $video_id . "';</script>";
             exit;
 
         } catch (Exception $e) {

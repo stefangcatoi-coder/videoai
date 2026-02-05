@@ -98,7 +98,16 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 
     $whisper_bin = (shell_exec("which whisper") !== null) ? "whisper" : "/usr/local/bin/whisper";
     $whisper_cmd = "$whisper_bin " . escapeshellarg($audio) . " --model base --language " . escapeshellarg($whisper_lang) . " --word_timestamps True --output_format json --output_dir " . escapeshellarg($tempDir) . " 2>&1";
-    exec($whisper_cmd, $w_out, $w_ret);
+
+    $w_handle = popen("$whisper_cmd", 'r');
+    $w_out_str = "";
+    while (!feof($w_handle)) {
+        $line = fgets($w_handle);
+        $w_out_str .= $line;
+        echo "<!-- Transcribing... -->";
+        flush();
+    }
+    $w_ret = pclose($w_handle);
 
     function formatAssTime($seconds) {
         $h = floor($seconds / 3600);
@@ -144,7 +153,7 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         file_put_contents($assFile, $assHeader . $events);
         $useAss = true;
     } else {
-        file_put_contents(__DIR__ . '/../storage/debug_whisper.log', " Whisper failed with code $w_ret for video $video_id\n", FILE_APPEND);
+        file_put_contents(__DIR__ . '/../storage/debug_whisper.log', " Whisper failed with code $w_ret for video $video_id. Output: $w_out_str\n", FILE_APPEND);
         $useAss = false;
     }
 
@@ -185,10 +194,20 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         "-filter_complex " . escapeshellarg($filter) . " " .
         "-map \"[$lastLabel]\" -map $num_images:a -c:v libx264 -pix_fmt yuv420p -preset faster -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path);
 
-    shell_exec("$ffmpeg_cmd 2>&1");
+    // Use popen to keep connection alive during long rendering
+    $handle = popen("$ffmpeg_cmd 2>&1", 'r');
+    $full_output = "";
+    while (!feof($handle)) {
+        $line = fgets($handle);
+        $full_output .= $line;
+        // Keep-alive every few lines of output
+        echo "<!-- Rendering... -->";
+        flush();
+    }
+    pclose($handle);
 
     if (!file_exists($output_path) || filesize($output_path) < 1000) {
-        file_put_contents(__DIR__ . '/../storage/debug_render.log', "CMD: $ffmpeg_cmd\n\nFailed to generate video.\n", FILE_APPEND);
+        file_put_contents(__DIR__ . '/../storage/debug_render.log', "CMD: $ffmpeg_cmd\n\nOUTPUT:\n$full_output\nFailed to generate video.\n", FILE_APPEND);
         echo "<p style='color: red;'>Eroare FFmpeg. Verifică storage/debug_render.log.</p>";
         exit;
     }
