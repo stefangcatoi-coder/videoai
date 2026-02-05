@@ -52,6 +52,29 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     if (ob_get_level()) ob_end_flush();
     flush();
 
+    // --- Queue Logic (One render at a time) ---
+    $lockFile = __DIR__ . '/../storage/render.lock';
+    if (!is_dir(__DIR__ . '/../storage')) mkdir(__DIR__ . '/../storage', 0775, true);
+    $lockFp = fopen($lockFile, 'c+');
+    $waiting = false;
+    $queueStartTime = time();
+
+    while (!flock($lockFp, LOCK_EX | LOCK_NB)) {
+        if (!$waiting) {
+            echo "<h2>Server-ul este ocupat (Coada de așteptare)...</h2>";
+            echo "<p>Mai există un video în lucru. Te rugăm să NU închizi această pagină, procesarea ta va începe automat.</p>";
+            $waiting = true;
+        }
+        echo "<!-- Waiting in queue... " . str_repeat(".", 100) . " -->\n";
+        flush();
+        sleep(5);
+        if ((time() - $queueStartTime) > 1200) die("Eroare: Timp de așteptare în coadă expirat.");
+    }
+    // Now we have the lock
+    ftruncate($lockFp, 0);
+    fwrite($lockFp, getmypid());
+    // --- End Queue Logic ---
+
     // 2. Paths and Config
     function getRealFfPath($path) {
         if (empty($path)) return "";
@@ -99,14 +122,13 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 
     $whisper_bin = trim(shell_exec("which whisper") ?? "");
     if (empty($whisper_bin)) {
-        if (file_exists("/usr/local/bin/whisper")) $whisper_bin = "/usr/local/bin/whisper";
-        elseif (file_exists("/usr/bin/whisper")) $whisper_bin = "/usr/bin/whisper";
-        elseif (file_exists("/home/jules/.local/bin/whisper")) $whisper_bin = "/home/jules/.local/bin/whisper";
-        else $whisper_bin = "whisper";
+        $possible_whisper = ["/usr/local/bin/whisper", "/usr/bin/whisper", "/home/ubuntu/.local/bin/whisper", "/var/www/.local/bin/whisper"];
+        foreach ($possible_whisper as $p) { if (file_exists($p)) { $whisper_bin = $p; break; } }
+        if (empty($whisper_bin)) $whisper_bin = "whisper";
     }
 
     // nice -n 19 to prevent system choking, --threads 4 to use all CPUs
-    $whisper_cmd = "nice -n 19 " . escapeshellarg($whisper_bin) . " " . escapeshellarg($audio) . " --model base --language " . escapeshellarg($whisper_lang) . " --word_timestamps True --threads 4 --output_format json --output_dir " . escapeshellarg($tempDir) . " 2>&1";
+    $whisper_cmd = "nice -n 19 " . $whisper_bin . " " . escapeshellarg($audio) . " --model base --language " . escapeshellarg($whisper_lang) . " --word_timestamps True --threads 4 --output_format json --output_dir " . escapeshellarg($tempDir) . " 2>&1";
 
     // Log Whisper Command
     file_put_contents(__DIR__ . '/../storage/debug_whisper.log', "[" . date('Y-m-d H:i:s') . "] Starting Whisper. CMD: $whisper_cmd\n", FILE_APPEND);
@@ -116,7 +138,7 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     while (!feof($w_handle)) {
         $line = fgets($w_handle);
         $w_out_str .= $line;
-        echo "<!-- Transcribing... -->";
+        echo "<!-- Transcribing... " . str_repeat(".", 100) . " -->\n";
         flush();
     }
     $w_ret = pclose($w_handle);
@@ -217,7 +239,7 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     }
 
     // nice -n 19 and -threads 4 for FFmpeg too
-    $ffmpeg_cmd = "nice -n 19 " . escapeshellarg($ffmpeg_bin) . " -y $inputs -i " . escapeshellarg($audio) . " " .
+    $ffmpeg_cmd = "nice -n 19 " . $ffmpeg_bin . " -y $inputs -i " . escapeshellarg($audio) . " " .
         "-filter_complex " . escapeshellarg($filter) . " " .
         "-map \"[$lastLabel]\" -map $num_images:a -threads 4 -c:v libx264 -pix_fmt yuv420p -preset faster -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path);
 
@@ -243,7 +265,8 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         exit;
     }
 
-    // 6. Cleanup
+    // 6. Cleanup Disabled per user request
+    /*
     foreach ($assets as $asset) {
         $p = getRealFfPath($asset['path']);
         if (strpos($p, 'http') !== 0 && file_exists($p)) @unlink($p);
@@ -251,6 +274,11 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     @unlink($jsonOutput);
     @unlink($assFile);
     @rmdir($tempDir);
+    */
+
+    // Release the queue lock
+    flock($lockFp, LOCK_UN);
+    fclose($lockFp);
 
     // 7. Update Database
     $stmt = $pdo->prepare("UPDATE videos SET status = 'done', video_path = ? WHERE id = ?");
