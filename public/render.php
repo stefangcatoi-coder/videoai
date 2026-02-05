@@ -97,9 +97,19 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     $jsonOutput = $tempDir . $audioBasename . ".json";
     $assFile = $tempDir . "subtitles.ass";
 
-    $whisper_bin = (shell_exec("which whisper") !== null) ? "whisper" : "/usr/local/bin/whisper";
+    $whisper_bin = trim(shell_exec("which whisper") ?? "");
+    if (empty($whisper_bin)) {
+        if (file_exists("/usr/local/bin/whisper")) $whisper_bin = "/usr/local/bin/whisper";
+        elseif (file_exists("/usr/bin/whisper")) $whisper_bin = "/usr/bin/whisper";
+        elseif (file_exists("/home/jules/.local/bin/whisper")) $whisper_bin = "/home/jules/.local/bin/whisper";
+        else $whisper_bin = "whisper";
+    }
+
     // nice -n 19 to prevent system choking, --threads 4 to use all CPUs
-    $whisper_cmd = "nice -n 19 $whisper_bin " . escapeshellarg($audio) . " --model base --language " . escapeshellarg($whisper_lang) . " --word_timestamps True --threads 4 --output_format json --output_dir " . escapeshellarg($tempDir) . " 2>&1";
+    $whisper_cmd = "nice -n 19 " . escapeshellarg($whisper_bin) . " " . escapeshellarg($audio) . " --model base --language " . escapeshellarg($whisper_lang) . " --word_timestamps True --threads 4 --output_format json --output_dir " . escapeshellarg($tempDir) . " 2>&1";
+
+    // Log Whisper Command
+    file_put_contents(__DIR__ . '/../storage/debug_whisper.log', "[" . date('Y-m-d H:i:s') . "] Starting Whisper. CMD: $whisper_cmd\n", FILE_APPEND);
 
     $w_handle = popen($whisper_cmd, 'r');
     $w_out_str = "";
@@ -131,6 +141,9 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     $primary_color = $color_map[$video['subtitle_color']] ?? '&H0000FFFF';
 
     if ($w_ret === 0 && file_exists($jsonOutput)) {
+        echo "<!-- Transcription complete. Building subtitle file... -->";
+        flush();
+
         $data = json_decode(file_get_contents($jsonOutput), true);
 
         $assHeader = "[Script Info]\nScriptType: v4.00+\nPlayResX: $width\nPlayResY: $height\n\n";
@@ -193,8 +206,18 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 
     if (!is_dir(__DIR__ . "/uploads/videos/")) mkdir(__DIR__ . "/uploads/videos/", 0775, true);
 
+    echo "<!-- Starting FFmpeg Rendering... This is the final step. -->";
+    flush();
+
+    $ffmpeg_bin = trim(shell_exec("which ffmpeg") ?? "");
+    if (empty($ffmpeg_bin)) {
+        if (file_exists("/usr/bin/ffmpeg")) $ffmpeg_bin = "/usr/bin/ffmpeg";
+        elseif (file_exists("/usr/local/bin/ffmpeg")) $ffmpeg_bin = "/usr/local/bin/ffmpeg";
+        else $ffmpeg_bin = "ffmpeg";
+    }
+
     // nice -n 19 and -threads 4 for FFmpeg too
-    $ffmpeg_cmd = "nice -n 19 ffmpeg -y $inputs -i " . escapeshellarg($audio) . " " .
+    $ffmpeg_cmd = "nice -n 19 " . escapeshellarg($ffmpeg_bin) . " -y $inputs -i " . escapeshellarg($audio) . " " .
         "-filter_complex " . escapeshellarg($filter) . " " .
         "-map \"[$lastLabel]\" -map $num_images:a -threads 4 -c:v libx264 -pix_fmt yuv420p -preset faster -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path);
 
