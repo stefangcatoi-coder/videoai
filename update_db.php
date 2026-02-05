@@ -14,7 +14,11 @@ try {
         'video_path TEXT',
         'prompt1 TEXT',
         'prompt2 TEXT',
-        'prompt3 TEXT'
+        'prompt3 TEXT',
+        'video_type TEXT DEFAULT "short"',
+        'language TEXT DEFAULT "ro"',
+        'subtitle_color TEXT',
+        'assets_json TEXT'
     ];
 
     foreach ($columns as $column) {

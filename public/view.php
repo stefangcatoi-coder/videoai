@@ -34,6 +34,7 @@ if ($video['status'] === 'draft') {
 }
 
 $placeholder = 'Nu a fost generat încă';
+$is_vertical = ($video['video_type'] === 'short');
 
 ?>
 <!DOCTYPE html>
@@ -50,14 +51,18 @@ $placeholder = 'Nu a fost generat încă';
         body { background-color: var(--bg-dark); color: var(--text-main); font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; }
         .main-content { margin-left: 250px; padding: 2rem; width: calc(100% - 250px); box-sizing: border-box; }
 
-        .view-grid { display: grid; grid-template-columns: 400px 1fr; gap: 2rem; align-items: start; }
+        .view-grid { display: grid; grid-template-columns: <?php echo $is_vertical ? '400px' : '1fr'; ?> 1fr; gap: 2rem; align-items: start; }
+        <?php if (!$is_vertical): ?>
+        .view-grid { grid-template-columns: 1fr; }
+        .resources-panel { grid-column: 1; }
+        <?php endif; ?>
 
-        /* Left Column: Player */
-        .player-card { background: #000; border-radius: 16px; border: 1px solid var(--border-color); overflow: hidden; position: sticky; top: 2rem; }
-        .video-container { aspect-ratio: 9/16; width: 100%; display: flex; align-items: center; justify-content: center; }
+        /* Player */
+        .player-card { background: #000; border-radius: 16px; border: 1px solid var(--border-color); overflow: hidden; <?php echo $is_vertical ? 'position: sticky; top: 2rem;' : ''; ?> }
+        .video-container { aspect-ratio: <?php echo $is_vertical ? '9/16' : '16/9'; ?>; width: 100%; display: flex; align-items: center; justify-content: center; }
         video { width: 100%; height: 100%; object-fit: contain; }
 
-        /* Right Column: Metadata */
+        /* Metadata */
         .resources-panel { display: flex; flex-direction: column; gap: 1.5rem; }
         .meta-card { background: var(--card-bg); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--border-color); }
         .meta-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem; }
@@ -90,7 +95,7 @@ $placeholder = 'Nu a fost generat încă';
 
         @media (max-width: 1000px) {
             .view-grid { grid-template-columns: 1fr; }
-            .player-card { position: relative; max-width: 400px; margin: 0 auto; }
+            .player-card { position: relative; max-width: <?php echo $is_vertical ? '400px' : '100%'; ?>; margin: 0 auto; }
         }
     </style>
 </head>
@@ -99,7 +104,7 @@ $placeholder = 'Nu a fost generat încă';
 
     <div class="main-content">
         <div class="view-grid">
-            <!-- Columna Stanga: Video -->
+            <!-- Video Column -->
             <div class="player-card">
                 <div class="video-container">
                     <?php if ($video['status'] === 'done'): ?>
@@ -125,10 +130,10 @@ $placeholder = 'Nu a fost generat încă';
                 </div>
             </div>
 
-            <!-- Columna Dreapta: Metadata & Resurse -->
+            <!-- Metadata Column -->
             <div class="resources-panel">
                 <div style="display:flex; justify-content: space-between; align-items: center;">
-                    <h1>Detalii Video</h1>
+                    <h1>Detalii Video (<?php echo $is_vertical ? 'Short' : 'Long'; ?>)</h1>
                     <div style="display: flex; align-items: center; gap: 1rem;">
                         <span class="badge badge-done"><?php echo $video['status']; ?></span>
                         <a href="dashboard.php" class="btn-done">Gata</a>
@@ -151,7 +156,7 @@ $placeholder = 'Nu a fost generat încă';
                         <button class="copy-btn" onclick="copyToClipboard('scriptField', this)">Copy</button>
                     </div>
                     <div class="field-group">
-                        <textarea id="scriptField" rows="6" readonly><?php echo htmlspecialchars($video['script'] ?: $placeholder); ?></textarea>
+                        <textarea id="scriptField" rows="10" readonly><?php echo htmlspecialchars($video['script'] ?: $placeholder); ?></textarea>
                     </div>
                 </div>
 

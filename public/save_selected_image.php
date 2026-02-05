@@ -38,11 +38,32 @@ file_put_contents($absolute_path, $imgData);
 
 // Update DB
 try {
-    $column = "image" . (int)$index;
-    $stmt = $pdo->prepare("UPDATE videos SET $column = ? WHERE id = ? AND user_id = ?");
-    $stmt->execute([$relative_path, $video_id, $_SESSION['user_id']]);
+    $pdo->beginTransaction();
 
+    // Legacy support for image1, image2, image3
+    if ($index <= 3) {
+        $column = "image" . (int)$index;
+        $stmt = $pdo->prepare("UPDATE videos SET $column = ? WHERE id = ? AND user_id = ?");
+        $stmt->execute([$relative_path, $video_id, $_SESSION['user_id']]);
+    }
+
+    // New assets_json support
+    $stmt_assets = $pdo->prepare("SELECT assets_json FROM videos WHERE id = ? AND user_id = ?");
+    $stmt_assets->execute([$video_id, $_SESSION['user_id']]);
+    $video = $stmt_assets->fetch();
+
+    if ($video) {
+        $assets = json_decode($video['assets_json'], true) ?: [];
+        if (isset($assets[$index - 1])) {
+            $assets[$index - 1]['path'] = $relative_path;
+            $stmt_upd = $pdo->prepare("UPDATE videos SET assets_json = ? WHERE id = ?");
+            $stmt_upd->execute([json_encode($assets), $video_id]);
+        }
+    }
+
+    $pdo->commit();
     echo json_encode(['success' => true, 'path' => $relative_path]);
 } catch (Exception $e) {
+    if ($pdo->inTransaction()) $pdo->rollBack();
     echo json_encode(['success' => false, 'error' => $e->getMessage()]);
 }
