@@ -110,11 +110,11 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     $w_ret = pclose($w_handle);
 
     function formatAssTime($seconds) {
-        $h = floor($seconds / 3600);
-        $m = floor(($seconds / 60) % 60);
-        $s = floor($seconds % 60);
-        $cs = round(($seconds - floor($seconds)) * 100);
-        if ($cs >= 100) { $cs = 0; $s++; }
+        $h = (int)($seconds / 3600);
+        $m = (int)($seconds / 60) % 60;
+        $s = (int)$seconds % 60;
+        $cs = (int)round(($seconds - floor($seconds)) * 100);
+        if ($cs >= 100) { $cs = 0; $s++; if ($s >= 60) { $s = 0; $m++; if ($m >= 60) { $m = 0; $h++; } } }
         return sprintf("%d:%02d:%02d.%02d", $h, $m, $s, $cs);
     }
 
