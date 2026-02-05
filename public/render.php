@@ -2,7 +2,8 @@
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
-set_time_limit(1200); // 20 minutes for long rendering
+ini_set('memory_limit', '512M'); // Handle large Whisper JSON
+set_time_limit(1800); // 30 minutes for very long videos
 
 // /var/www/video-ai/public/render.php
 
@@ -97,9 +98,10 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     $assFile = $tempDir . "subtitles.ass";
 
     $whisper_bin = (shell_exec("which whisper") !== null) ? "whisper" : "/usr/local/bin/whisper";
-    $whisper_cmd = "$whisper_bin " . escapeshellarg($audio) . " --model base --language " . escapeshellarg($whisper_lang) . " --word_timestamps True --output_format json --output_dir " . escapeshellarg($tempDir) . " 2>&1";
+    // nice -n 19 to prevent system choking, --threads 4 to use all CPUs
+    $whisper_cmd = "nice -n 19 $whisper_bin " . escapeshellarg($audio) . " --model base --language " . escapeshellarg($whisper_lang) . " --word_timestamps True --threads 4 --output_format json --output_dir " . escapeshellarg($tempDir) . " 2>&1";
 
-    $w_handle = popen("$whisper_cmd", 'r');
+    $w_handle = popen($whisper_cmd, 'r');
     $w_out_str = "";
     while (!feof($w_handle)) {
         $line = fgets($w_handle);
@@ -159,8 +161,9 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 
     // 5. Build Filter Complex
     $zoompan_d = round($img_duration * 25);
-    $target_w = $width * 2;
-    $target_h = $height * 2;
+    // Use 1.5x scaling instead of 2x to save memory
+    $target_w = round($width * 1.5);
+    $target_h = round($height * 1.5);
     $preScale = "scale=$target_w:$target_h:force_original_aspect_ratio=increase,crop=$target_w:$target_h,setsar=1";
     $zoomLogic = "zoompan=z='min(zoom+0.0015,1.5)':d=$zoompan_d:s={$width}x{$height}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25";
 
@@ -190,18 +193,23 @@ if (!$video || $video['status'] !== 'ready_for_render') {
 
     if (!is_dir(__DIR__ . "/uploads/videos/")) mkdir(__DIR__ . "/uploads/videos/", 0775, true);
 
-    $ffmpeg_cmd = "ffmpeg -y $inputs -i " . escapeshellarg($audio) . " " .
+    // nice -n 19 and -threads 4 for FFmpeg too
+    $ffmpeg_cmd = "nice -n 19 ffmpeg -y $inputs -i " . escapeshellarg($audio) . " " .
         "-filter_complex " . escapeshellarg($filter) . " " .
-        "-map \"[$lastLabel]\" -map $num_images:a -c:v libx264 -pix_fmt yuv420p -preset faster -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path);
+        "-map \"[$lastLabel]\" -map $num_images:a -threads 4 -c:v libx264 -pix_fmt yuv420p -preset faster -crf 23 -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path);
+
+    // Log the command for debugging
+    file_put_contents(__DIR__ . '/../storage/debug_render.log', "[" . date('Y-m-d H:i:s') . "] Starting FFmpeg render. Video ID: $video_id\n", FILE_APPEND);
 
     // Use popen to keep connection alive during long rendering
-    $handle = popen("$ffmpeg_cmd 2>&1", 'r');
+    $handle = popen($ffmpeg_cmd . " 2>&1", 'r');
     $full_output = "";
     while (!feof($handle)) {
         $line = fgets($handle);
+        if ($line === false) break;
         $full_output .= $line;
-        // Keep-alive every few lines of output
-        echo "<!-- Rendering... -->";
+        // Keep-alive with more data to be sure
+        echo "<!-- Rendering segment... " . str_repeat(".", 100) . " -->\n";
         flush();
     }
     pclose($handle);
