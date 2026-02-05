@@ -51,70 +51,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
         }
 
         // 2. Save changes locally
-        $stmt_update = $pdo->prepare("UPDATE videos SET title = ?, script = ?, description = ?, tags = ? WHERE id = ?");
+        $stmt_update = $pdo->prepare("UPDATE videos SET title = ?, script = ?, description = ?, tags = ?, status = 'processing' WHERE id = ?");
         $stmt_update->execute([$new_title, $new_script, $new_description, $new_tags, $video_id]);
 
-        // 3. Call Speechify API for Voiceover
-        $apiKey = SPEECHIFY_API_KEY;
-        $url = SPEECHIFY_API_URL;
-
-        $payload = [
-            "input" => $new_script,
-            "voice_id" => "george", 
-            "language" => "ro-RO",
-            "audio_format" => "mp3",
-            "model" => "simba-multilingual"
-        ];
-
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            "Authorization: Bearer $apiKey",
-            "Content-Type: application/json"
-        ]);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($httpCode !== 200) {
-            file_put_contents(__DIR__ . '/../storage/debug_speechify.log', "HTTP $httpCode: " . $response . "\n", FILE_APPEND);
-            throw new Exception("Eroare Speechify API (HTTP $httpCode).");
-        }
-
-        $result = json_decode($response, true);
-        $audio_base64 = $result['audio_data'] ?? '';
-
-        if (empty($audio_base64)) {
-            throw new Exception("Speechify nu a returnat date audio.");
-        }
-
-        // 4. Save Audio File
-        $audio_content = base64_decode($audio_base64);
-        $filename = "voiceover_" . $video_id . "_" . time() . ".mp3";
-        $upload_dir = __DIR__ . "/uploads/audio/";
-        if (!is_dir($upload_dir)) mkdir($upload_dir, 0775, true);
-        
-        $file_path = $upload_dir . $filename;
-        file_put_contents($file_path, $audio_content);
-        $relative_audio_path = "uploads/audio/" . $filename;
-
-        // 5. Update Database Status to ready_for_render
-        $stmt_final = $pdo->prepare("UPDATE videos SET status = 'ready_for_render', voiceover_path = ? WHERE id = ?");
-        $stmt_final->execute([$relative_audio_path, $video_id]);
-
-        // 6. Increment usage
+        // 3. Increment usage
         $stmt_inc = $pdo->prepare("UPDATE users SET videos_used = videos_used + 1 WHERE id = ?");
         $stmt_inc->execute([$user_id]);
 
         $pdo->commit();
 
-        // 7. Redirect to render.php
-        header("Location: render.php?id=" . $video_id);
+        // 4. Trigger Async Pipeline
+        $cmd = "php " . __DIR__ . "/../app/process_video.php " . $video_id . " > /dev/null 2>&1 &";
+        exec($cmd);
+
+        // 5. Redirect to dashboard with message
+        header("Location: dashboard.php?success=Procesarea video-ului a început. Va fi gata în curând!");
         exit;
 
     } catch (Exception $e) {
@@ -167,9 +118,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
                     <div class="form-group"><label>Etichete</label><input type="text" name="tags" value="<?php echo htmlspecialchars($video['tags']); ?>"></div>
                     <label>Imagini Generate (DeAPI)</label>
                     <div class="images-grid">
-                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image1']); ?>"></div>
-                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image2']); ?>"></div>
-                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image3']); ?>"></div>
+                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image1'] ?: ''); ?>"></div>
+                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image2'] ?: ''); ?>"></div>
+                        <div class="image-card"><img src="<?php echo htmlspecialchars($video['image3'] ?: ''); ?>"></div>
                     </div>
                     <button type="submit" name="produce" class="btn-produce">GENEREAZĂ VIDEO FINAL</button>
                 </div>
