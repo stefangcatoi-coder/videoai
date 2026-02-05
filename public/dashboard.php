@@ -23,7 +23,6 @@ $stmt->execute([$user_id]);
 $user = $stmt->fetch();
 
 if (!$user) {
-    // Should not happen if session is valid
     session_destroy();
     header("Location: login.php");
     exit;
@@ -34,7 +33,6 @@ $stmt = $pdo->prepare("SELECT * FROM videos WHERE user_id = ? ORDER BY created_a
 $stmt->execute([$user_id]);
 $videos = $stmt->fetchAll();
 
-// Logic for Create Video button
 $limit_reached = ($user['videos_used'] >= $user['monthly_limit']);
 $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user['monthly_limit']) * 100 : 0;
 ?>
@@ -45,158 +43,25 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - Video AI</title>
     <style>
-        body {
-            background-color: #121212;
-            color: #e0e0e0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            display: flex;
-        }
-
-        /* Main Content */
-        .main-content {
-            margin-left: 250px;
-            padding: 2rem;
-            width: 100%;
-        }
-
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 2rem;
-        }
-
-        .user-info {
-            text-align: right;
-        }
-
-        .btn-create {
-            display: inline-block;
-            padding: 0.75rem 1.5rem;
-            border-radius: 4px;
-            text-decoration: none;
-            font-weight: bold;
-            transition: opacity 0.3s;
-        }
-
-        .btn-green {
-            background-color: #03dac6;
-            color: #121212;
-        }
-
-        .btn-green:hover {
-            background-color: #01b0a1;
-        }
-
-        .btn-disabled {
-            background-color: #555;
-            color: #888;
-            cursor: not-allowed;
-        }
-
-        .upgrade-msg {
-            display: block;
-            margin-top: 0.5rem;
-            color: #cf6679;
-            font-size: 0.85rem;
-        }
-
-        /* Stats Card */
-        .card {
-            background-color: #1e1e1e;
-            padding: 1.5rem;
-            border-radius: 8px;
-            margin-bottom: 2rem;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        }
-
-        .progress-container {
-            background-color: #333;
-            border-radius: 10px;
-            height: 12px;
-            width: 100%;
-            margin: 1rem 0;
-            overflow: hidden;
-        }
-
-        .progress-bar {
-            background-color: #bb86fc;
-            height: 100%;
-            transition: width 0.5s ease-in-out;
-        }
-
-        /* Table Styles */
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 1rem;
-        }
-
-        th, td {
-            text-align: left;
-            padding: 1rem;
-            border-bottom: 1px solid #333;
-        }
-
-        th {
-            color: #bb86fc;
-            text-transform: uppercase;
-            font-size: 0.8rem;
-            letter-spacing: 1px;
-        }
-
-        .empty-msg {
-            text-align: center;
-            padding: 3rem;
-            color: #888;
-        }
-
-        /* Status Labels */
-        .status-badge {
-            padding: 0.25rem 0.6rem;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: bold;
-            text-transform: uppercase;
-        }
-
-        .status-draft {
-            background-color: rgba(224, 224, 224, 0.2);
-            color: #e0e0e0;
-            border: 1px solid #e0e0e0;
-        }
-
-        .status-pending_production, .status-ready_for_render {
-            background-color: rgba(3, 218, 198, 0.2);
-            color: #03dac6;
-            border: 1px solid #03dac6;
-        }
-
-        .status-pending, .status-processing {
-            background-color: rgba(255, 152, 0, 0.2);
-            color: #ff9800;
-            border: 1px solid #ff9800;
-        }
-
-        .status-done {
-            background-color: rgba(76, 175, 80, 0.2);
-            color: #4caf50;
-            border: 1px solid #4caf50;
-        }
-
-        .ai-working {
-            display: block;
-            font-size: 0.7rem;
-            margin-top: 4px;
-            font-style: italic;
-            opacity: 0.8;
-        }
+        body { background-color: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; }
+        .main-content { margin-left: 250px; padding: 2rem; width: 100%; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
+        .btn-create { display: inline-block; padding: 0.75rem 1.5rem; border-radius: 4px; text-decoration: none; font-weight: bold; }
+        .btn-green { background-color: #03dac6; color: #121212; }
+        .card { background-color: #1e1e1e; padding: 1.5rem; border-radius: 8px; margin-bottom: 2rem; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        th, td { text-align: left; padding: 1rem; border-bottom: 1px solid #333; }
+        th { color: #bb86fc; text-transform: uppercase; font-size: 0.8rem; }
+        .status-badge { padding: 0.25rem 0.6rem; border-radius: 20px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; }
+        .status-draft { background-color: rgba(224, 224, 224, 0.2); color: #e0e0e0; border: 1px solid #e0e0e0; }
+        .status-processing { background-color: rgba(255, 152, 0, 0.2); color: #ff9800; border: 1px solid #ff9800; }
+        .status-assets { background-color: rgba(187, 134, 252, 0.2); color: #bb86fc; border: 1px solid #bb86fc; }
+        .status-ready { background-color: rgba(3, 218, 198, 0.2); color: #03dac6; border: 1px solid #03dac6; }
+        .ai-working { display: block; font-size: 0.7rem; margin-top: 4px; font-style: italic; opacity: 0.8; }
     </style>
 </head>
 <body>
     <?php include __DIR__ . '/../views/header.php'; ?>
-
     <div class="main-content">
         <?php if (isset($_GET['success'])): ?>
             <div style="background-color: rgba(3, 218, 198, 0.1); color: #03dac6; padding: 1rem; border-radius: 4px; margin-bottom: 2rem; border: 1px solid #03dac6; text-align: center;">
@@ -206,76 +71,57 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
 
         <div class="header">
             <h1>Dashboard</h1>
-            <div style="display: flex; align-items: center; gap: 1.5rem;">
-                <?php if (!$limit_reached): ?>
-                    <a href="generate.php" class="btn-create btn-green">+ Video Nou</a>
-                <?php endif; ?>
-                <div class="user-info">
-                    <strong><?php echo htmlspecialchars($user['email']); ?></strong><br>
-                    <span>Plan: <?php echo htmlspecialchars($user['plan']); ?></span>
-                </div>
+            <div class="user-info">
+                <strong><?php echo htmlspecialchars($user['email']); ?></strong> (<?php echo htmlspecialchars($user['plan']); ?>)
             </div>
         </div>
 
         <div class="card">
             <h3>Limită lunară</h3>
             <p><?php echo $user['videos_used']; ?> / <?php echo $user['monthly_limit']; ?> video-uri utilizate</p>
-            <div class="progress-container">
-                <div class="progress-bar" style="width: <?php echo min(100, $progress_percent); ?>%;"></div>
-            </div>
-
-            <?php if ($limit_reached): ?>
-                <a href="#" class="btn-create btn-disabled">Creează Video</a>
-                <span class="upgrade-msg">Ai atins limita. Upgrade Plan pentru a continua.</span>
-            <?php else: ?>
-                <a href="generate.php" class="btn-create btn-green">Creează Video</a>
-            <?php endif; ?>
+            <a href="generate.php" class="btn-create btn-green">+ Video Nou</a>
         </div>
 
         <div class="card">
             <h3>Video-urile tale</h3>
-            <?php if (empty($videos)): ?>
-                <div class="empty-msg">Nu ai niciun video încă.</div>
-            <?php else: ?>
-                <table>
-                    <thead>
+            <table>
+                <thead>
+                    <tr><th>Titlu</th><th>Creat la</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($videos as $v): ?>
                         <tr>
-                            <th>Titlu</th>
-                            <th>Creat la</th>
-                            <th>Status</th>
+                            <td>
+                                <?php if ($v['status'] === 'draft'): ?>
+                                    <a href="edit_draft.php?id=<?php echo $v['id']; ?>" style="color: #bb86fc; text-decoration: none;"><strong><?php echo htmlspecialchars($v['title']); ?></strong></a>
+                                <?php elseif ($v['status'] === 'ready_for_render'): ?>
+                                    <a href="view.php?id=<?php echo $v['id']; ?>" style="color: #03dac6; text-decoration: none;"><strong><?php echo htmlspecialchars($v['title']); ?></strong></a>
+                                <?php else: ?>
+                                    <strong><?php echo htmlspecialchars($v['title']); ?></strong>
+                                <?php endif; ?>
+                            </td>
+                            <td><?php echo date('d.m.Y H:i', strtotime($v['created_at'])); ?></td>
+                            <td>
+                                <?php if ($v['status'] === 'generating_assets'): ?>
+                                    <span class="status-badge status-assets">Imagini AI</span>
+                                    <span class="ai-working">Descărcăm imagini...</span>
+                                <?php elseif ($v['status'] === 'draft'): ?>
+                                    <span class="status-badge status-draft">Draft</span>
+                                    <span class="ai-working">Așteaptă editare</span>
+                                <?php elseif ($v['status'] === 'processing'): ?>
+                                    <span class="status-badge status-processing">Procesare</span>
+                                    <span class="ai-working">Generăm voce și video...</span>
+                                <?php elseif ($v['status'] === 'ready_for_render'): ?>
+                                    <span class="status-badge status-ready">Finalizat</span>
+                                    <span class="ai-working">Gata de vizionat</span>
+                                <?php else: ?>
+                                    <span class="status-badge"><?php echo htmlspecialchars($v['status']); ?></span>
+                                <?php endif; ?>
+                            </td>
                         </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($videos as $video): ?>
-                            <tr>
-                                <td>
-                                    <?php if ($video['status'] === 'draft'): ?>
-                                        <a href="edit_draft.php?id=<?php echo $video['id']; ?>" style="color: #bb86fc; text-decoration: none;"><strong><?php echo htmlspecialchars($video['title']); ?></strong></a>
-                                    <?php else: ?>
-                                        <a href="view.php?id=<?php echo $video['id']; ?>" style="color: #bb86fc; text-decoration: none;"><strong><?php echo htmlspecialchars($video['title']); ?></strong></a>
-                                    <?php endif; ?>
-                                </td>
-                                <td><?php echo date('d.m.Y H:i', strtotime($video['created_at'])); ?></td>
-                                <td>
-                                    <?php if ($video['status'] === 'draft'): ?>
-                                        <span class="status-badge status-draft">Draft</span>
-                                    <?php elseif ($video['status'] === 'processing'): ?>
-                                        <span class="status-badge status-processing">Procesare AI</span>
-                                        <span class="ai-working">Generăm voce și subtitrări...</span>
-                                    <?php elseif ($video['status'] === 'ready_for_render'): ?>
-                                        <span class="status-badge status-ready_for_render">Gata de Randare</span>
-                                        <a href="render.php?id=<?php echo $video['id']; ?>" class="ai-working" style="color: #03dac6; text-decoration: underline;">Click pentru randare finală</a>
-                                    <?php elseif ($video['status'] === 'done'): ?>
-                                        <span class="status-badge status-done">Finalizat</span>
-                                    <?php else: ?>
-                                        <span class="status-badge"><?php echo htmlspecialchars($video['status']); ?></span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php endif; ?>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
         </div>
     </div>
 </body>

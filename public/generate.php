@@ -2,7 +2,7 @@
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
-set_time_limit(600); // 10 minutes for API calls and downloads
+set_time_limit(600); // 10 minutes for API calls
 
 // /var/www/video-ai/public/generate.php
 
@@ -16,7 +16,6 @@ if (!isset($_SESSION['user_id'])) {
 
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../config/gemini.php';
-require_once __DIR__ . '/../config/deapi.php';
 
 $user_id = $_SESSION['user_id'];
 $error = '';
@@ -34,105 +33,6 @@ if (!$user) {
 
 $can_generate = ($user['videos_used'] < $user['monthly_limit']);
 
-// Helper function to generate and download image via DeAPI.ai
-function generateAndDownloadImage($prompt, $videoId, $index) {
-    $apiKey = trim(DEAPI_API_KEY);
-    $url = DEAPI_API_URL;
-
-    $payload = [
-        "prompt" => $prompt,
-        "model" => "Flux.1-schnell",
-        "width" => 1920,
-        "height" => 1080,
-        "seed" => rand(1, 99999999)
-    ];
-
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        "Authorization: Bearer $apiKey",
-        "Content-Type: application/json"
-    ]);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($httpCode !== 200) {
-        file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "HTTP $httpCode (Initiate): " . $response . "\n", FILE_APPEND);
-        throw new Exception("Eroare DeAPI (HTTP $httpCode). Verifică storage/debug_deapi.log.");
-    }
-
-    $result = json_decode($response, true);
-    $requestId = $result['request_id'] ?? $result['id'] ?? null;
-
-    if (!$requestId) {
-        $imgUrl = $result['data'][0]['url'] ?? $result['url'] ?? $result['output'][0] ?? '';
-        if (empty($imgUrl)) {
-            throw new Exception("DeAPI nu a returnat un request_id sau un URL valid.");
-        }
-    } else {
-        // Polling for the asynchronous result
-        $statusUrl = DEAPI_STATUS_URL . $requestId;
-        $maxAttempts = 40;
-        $attempts = 0;
-        $imgUrl = '';
-
-        while ($attempts < $maxAttempts) {
-            sleep(3);
-            $attempts++;
-
-            $ch = curl_init($statusUrl);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Bearer $apiKey"]);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 15);
-
-            $statusRes = curl_exec($ch);
-            $statusHttp = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-
-            if ($statusHttp === 200) {
-                $statusData = json_decode($statusRes, true);
-                $status = $statusData['status'] ?? '';
-
-                if ($status === 'completed' || $status === 'succeeded' || isset($statusData['output']) || isset($statusData['url'])) {
-                     $imgUrl = $statusData['output'][0] ?? $statusData['url'] ?? ($statusData['data'][0]['url'] ?? '');
-                     if ($imgUrl) break;
-                } elseif ($status === 'failed') {
-                    file_put_contents(__DIR__ . '/../storage/debug_deapi.log', "Status Failed: " . $statusRes . "\n", FILE_APPEND);
-                    throw new Exception("Generarea imaginii a eșuat la DeAPI.");
-                }
-            }
-        }
-    }
-
-    if (empty($imgUrl)) {
-        throw new Exception("Timeout sau eroare la obținerea URL-ului imaginii de la DeAPI.");
-    }
-
-    // Download local
-    $imgData = @file_get_contents($imgUrl);
-    if ($imgData === false) {
-        throw new Exception("Nu am putut descărca imaginea de la URL: " . $imgUrl);
-    }
-
-    $filename = "img_" . $videoId . "_" . $index . "_" . time() . ".jpg";
-    $relative_path = "uploads/images/" . $filename;
-    $absolute_path = __DIR__ . "/" . $relative_path;
-    
-    $dir = dirname($absolute_path);
-    if (!is_dir($dir)) mkdir($dir, 0775, true);
-    
-    file_put_contents($absolute_path, $imgData);
-    
-    return $relative_path;
-}
-
 // Processing Form Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
     $idea = trim($_POST['idea'] ?? '');
@@ -142,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
             $error = "Ideea este prea lungă (maxim 500 caractere).";
         } else {
             try {
-                // 1. Prepare Prompt for Gemini (SEO Optimized)
+                // 1. Prepare Prompt for Gemini (SEO Optimized for 10-15 mins)
                 $prompt = "Generate a professional SEO-optimized video plan for: \"$idea\".
                 Requirements:
                 - Duration: 10-15 minutes long-form YouTube video.
@@ -181,15 +81,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                 curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
                 curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-                curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 120); // High timeout for long content
 
                 $response = curl_exec($ch);
                 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $curlError = curl_error($ch);
                 curl_close($ch);
 
                 if ($httpCode !== 200) {
-                    file_put_contents(__DIR__ . '/../storage/debug_api.log', $response);
-                    throw new Exception("Eroare API Gemini (HTTP $httpCode).");
+                    $logMsg = "HTTP Code: $httpCode\nCurl Error: $curlError\nResponse: $response\n";
+                    file_put_contents(__DIR__ . '/../storage/debug_api.log', $logMsg);
+                    throw new Exception("Eroare API Gemini (HTTP $httpCode). Detalii în storage/debug_api.log.");
                 }
 
                 $result = json_decode($response, true);
@@ -205,10 +107,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                     throw new Exception("AI-ul nu a returnat un format JSON valid.");
                 }
 
-                // 3. Save to Database (Initial Draft)
-                $pdo->beginTransaction();
+                // 3. Process Logic
+                // a. Subtitle Color
+                $colors = ['yellow', 'white', 'cyan', 'lime', 'orange', 'light blue'];
+                $randomColor = $colors[array_rand($colors)];
 
-                // Segmentation Logic (600-900 words)
+                // b. Segmentation Logic (600-900 words)
                 $fullScript = $aiData['script'] ?? '';
                 $words = explode(' ', $fullScript);
                 $segments = [];
@@ -219,7 +123,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                 foreach ($words as $word) {
                     $currentSegment[] = $word;
                     $wordCount++;
-                    if ($wordCount >= 750) { // Aim for middle of 600-900
+                    if ($wordCount >= 750) {
                         $segments[] = "[SEGMENT $segmentIndex]\n" . implode(' ', $currentSegment);
                         $currentSegment = [];
                         $wordCount = 0;
@@ -231,38 +135,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                 }
                 $segmentsJson = json_encode($segments);
 
-                $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags, video_type, segments_json) VALUES (?, ?, 'draft', ?, ?, ?, 'landscape', ?)");
+                // 4. Save to Database (Initial state)
+                $pdo->beginTransaction();
+
+                $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags, video_type, segments_json, subtitle_color, assets_json) VALUES (?, ?, 'generating_assets', ?, ?, ?, 'landscape', ?, ?, ?)");
                 $stmt->execute([
                     $user_id,
                     $aiData['title'] ?? $idea,
                     $fullScript,
                     $aiData['description'] ?? '',
                     $aiData['tags'] ?? '',
-                    $segmentsJson
+                    $segmentsJson,
+                    $randomColor,
+                    json_encode($aiData['image_prompts'] ?? []) // Store prompts temporarily in assets_json
                 ]);
 
                 $video_id = $pdo->lastInsertId();
-
-                // 4. Generate and Save Images (Up to 10)
-                $prompts = $aiData['image_prompts'] ?? [];
-                $localImages = [];
-                for ($i = 0; $i < min(count($prompts), 10); $i++) {
-                    $localImages[] = generateAndDownloadImage($prompts[$i], $video_id, $i + 1);
-                }
-
-                // Update with image paths (storing in assets_json since we only had image1-3)
-                $stmt_upd = $pdo->prepare("UPDATE videos SET image1 = ?, image2 = ?, image3 = ?, assets_json = ? WHERE id = ?");
-                $stmt_upd->execute([
-                    $localImages[0] ?? '',
-                    $localImages[1] ?? '',
-                    $localImages[2] ?? '',
-                    json_encode($localImages),
-                    $video_id
-                ]);
-
                 $pdo->commit();
 
-                header("Location: edit_draft.php?id=" . $video_id);
+                // 5. Trigger Async Assets Worker
+                $cmd = "php " . __DIR__ . "/../app/generate_assets.php " . $video_id . " > /dev/null 2>&1 &";
+                exec($cmd);
+
+                header("Location: dashboard.php?success=Planul a fost generat! Acum descărcăm imaginile în fundal.");
                 exit;
 
             } catch (Exception $e) {
@@ -321,7 +216,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
     </div>
     <div id="loading" class="loading-overlay">
         <div class="spinner"></div>
-        <p>Gemini și DeAPI lucrează... Te rugăm să aștepți (aprox. 1-2 minute).</p>
+        <p>Gemini lucrează... Te rugăm să aștepți (aprox. 1 minut).</p>
     </div>
     <script>
         document.getElementById('genForm').addEventListener('submit', function() {
