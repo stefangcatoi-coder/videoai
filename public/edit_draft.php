@@ -63,47 +63,89 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['produce'])) {
         $stmt_update = $pdo->prepare("UPDATE videos SET title = ?, script = ?, description = ?, tags = ? WHERE id = ?");
         $stmt_update->execute([$new_title, $new_script, $new_description, $new_tags, $video_id]);
 
-        // 3. Call Speechify API for Voiceover
-        $apiKey = SPEECHIFY_API_KEY;
+        // 3. Call Speechify API for Voiceover (with Chunking for long scripts)
+        $apiKey = trim(SPEECHIFY_API_KEY);
+        // Handle "Bearer " prefix if accidentally included in config
+        if (strpos($apiKey, 'Bearer ') === 0) {
+            $apiKey = substr($apiKey, 7);
+        }
         $url = SPEECHIFY_API_URL;
 
-        $payload = [
-            "input" => $new_script,
-            "voice_id" => "george", 
-            "language" => ($video['language'] === 'en' ? "en-US" : "ro-RO"),
-            "audio_format" => "mp3",
-            "model" => "simba-multilingual"
-        ];
+        // Clean script of problematic characters and ensure it's not too long for one go
+        $clean_script = str_replace(["\r", "\n"], " ", $new_script);
+        // Remove characters that might break JSON or the API
+        $clean_script = preg_replace('/[^\p{L}\p{N}\s\p{P}]/u', '', $clean_script);
+        $clean_script = preg_replace('/\s+/', ' ', $clean_script);
+        $clean_script = trim($clean_script);
 
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            "Authorization: Bearer $apiKey",
-            "Content-Type: application/json"
-        ]);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 90);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($httpCode !== 200) {
-            file_put_contents(__DIR__ . '/../storage/debug_speechify.log', "HTTP $httpCode: " . $response . "\n", FILE_APPEND);
-            throw new Exception("Eroare Speechify API (HTTP $httpCode).");
+        if (empty($clean_script)) {
+            throw new Exception("Scriptul este gol după curățare.");
         }
 
-        $result = json_decode($response, true);
-        $audio_base64 = $result['audio_data'] ?? '';
+        // Helper for splitting text into chunks (multibyte safe)
+        $chunks = [];
+        $tempText = $clean_script;
+        $maxLength = 3000; // Safer limit for various languages and diacritics
 
-        if (empty($audio_base64)) {
-            throw new Exception("Speechify nu a returnat date audio.");
+        while (mb_strlen($tempText, 'UTF-8') > $maxLength) {
+            $chunkPart = mb_substr($tempText, 0, $maxLength, 'UTF-8');
+            $cutPos = mb_strrpos($chunkPart, '.', 0, 'UTF-8');
+            if ($cutPos === false) $cutPos = mb_strrpos($chunkPart, ' ', 0, 'UTF-8');
+            if ($cutPos === false) $cutPos = $maxLength;
+
+            $chunks[] = mb_substr($tempText, 0, $cutPos + 1, 'UTF-8');
+            $tempText = trim(mb_substr($tempText, $cutPos + 1, NULL, 'UTF-8'));
+        }
+        if (!empty($tempText)) $chunks[] = $tempText;
+
+        $audio_content = "";
+        foreach ($chunks as $chunk) {
+            $payload = [
+                "input" => $chunk,
+                "voice_id" => "george",
+                "language" => ($video['language'] === 'en' ? "en-US" : "ro-RO"),
+                "audio_format" => "mp3",
+                "model" => "simba-multilingual"
+            ];
+
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                "Authorization: Bearer $apiKey",
+                "Content-Type: application/json"
+            ]);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+
+            $response = curl_exec($ch);
+            $err = curl_error($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode !== 200) {
+                $errorDetail = $response ?: $err;
+                file_put_contents(__DIR__ . '/../storage/debug_speechify.log', "HTTP $httpCode Payload: " . json_encode($payload) . " Response: " . $errorDetail . "\n", FILE_APPEND);
+
+                // If 400, it might be the voice/language combo
+                if ($httpCode === 400) {
+                    throw new Exception("Eroare Speechify API (400 - Bad Request). Verifică dacă vocea 'george' este disponibilă pentru limba selectată sau dacă textul conține caractere nepermise.");
+                }
+                throw new Exception("Eroare Speechify API (HTTP $httpCode). " . $errorDetail);
+            }
+
+            $result = json_decode($response, true);
+            $audio_base64 = $result['audio_data'] ?? '';
+
+            if (empty($audio_base64)) {
+                throw new Exception("Speechify nu a returnat date audio pentru un chunk.");
+            }
+            $audio_content .= base64_decode($audio_base64);
         }
 
         // 4. Save Audio File
-        $audio_content = base64_decode($audio_base64);
         $filename = "voiceover_" . $video_id . "_" . time() . ".mp3";
         $upload_dir = __DIR__ . "/uploads/audio/";
         if (!is_dir($upload_dir)) mkdir($upload_dir, 0775, true);
