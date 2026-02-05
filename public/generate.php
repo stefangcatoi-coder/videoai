@@ -42,8 +42,8 @@ function generateAndDownloadImage($prompt, $videoId, $index) {
     $payload = [
         "prompt" => $prompt,
         "model" => "Flux.1-schnell",
-        "width" => 1080,
-        "height" => 1920,
+        "width" => 1920,
+        "height" => 1080,
         "seed" => rand(1, 99999999)
     ];
 
@@ -143,22 +143,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
         } else {
             try {
                 // 1. Prepare Prompt for Gemini (SEO Optimized)
-                $prompt = "Generează un plan video profesional și optimizat SEO pentru ideea: \"$idea\".
-                Răspunsul tău TREBUIE să fie un obiect JSON pur, FĂRĂ MARCAJE MARKDOWN (fără ```json), fără nicio altă explicație în plus, strict în limba română (cu excepția image_prompts), cu următoarele câmpuri:
+                $prompt = "Generate a professional SEO-optimized video plan for: \"$idea\".
+                Requirements:
+                - Duration: 10-15 minutes long-form YouTube video.
+                - Script length: 1500-2200 words.
+                - Tone: professional, clear, engaging.
+                - Language: Romanian (except image_prompts).
+                - Image prompts: 10 cinematic landscape (16:9) descriptions in English.
+                - NO emojis, NO stage directions.
+                - DO NOT mention images or stock photos in the script.
 
-                - title: Un titlu captivant care să includă cuvinte cheie de tip 'Hook' (cârlig) pentru a atrage click-uri.
-                - script: Un text de exact 50-60 de cuvinte, optimizat pentru retenție: începe cu o întrebare intrigantă, oferă informație utilă la mijloc și încheie cu un îndemn clar de abonare.
-                - description: O descriere optimizată SEO care să respecte structura: o introducere captivantă, 3 puncte cheie (bullet points) despre subiect și un Call to Action (CTA) final.
-                - tags: O listă de 15-20 de etichete relevante, separate prin virgulă, incluzând atât cuvinte cheie generale, cât și 'long-tail keywords' specifice.
-                - image_prompts: Un array cu 3 descrieri vizuale detaliate, EXCLUSIV ÎN LIMBA ENGLEZĂ. Fiecare prompt trebuie să fie o descriere cinematică complexă pentru modelul Flux.1, incluzând detalii despre subiect, compoziție (ex: eye-level, wide shot), iluminare (ex: cinematic lighting, soft bokeh) și stil (ex: photorealistic, 8k, highly detailed). Promptele trebuie să fie direct legate de ideea video-ului și să asigure o continuitate vizuală între cele 3 scene.
+                Response MUST be a pure JSON object with:
+                - title: Catchy title with Hooks.
+                - script: The full script (1500-2200 words).
+                - description: SEO description with Intro, 3 bullet points, and CTA.
+                - tags: 15-20 relevant tags.
+                - image_prompts: Array of 10 detailed visual prompts in English for 16:9 landscape.
 
-                Exemplu format cerut (strict JSON):
+                Example format:
                 {
-                  \"title\": \"[HOOK] Titlu Optimizat\",
-                  \"script\": \"Vrei să afli cum...? [Informație]. Abonează-te pentru mai multe!\",
-                  \"description\": \"Intro... \n• Punct 1 \n• Punct 2 \n• Punct 3 \n\n Acționează acum!\",
-                  \"tags\": \"cuvânt1, cuvânt specific, long tail keyword...\",
-                  \"image_prompts\": [\"visual prompt 1\", \"visual prompt 2\", \"visual prompt 3\"]
+                  \"title\": \"...\",
+                  \"script\": \"...\",
+                  \"description\": \"...\",
+                  \"tags\": \"...\",
+                  \"image_prompts\": [\"prompt 1\", ..., \"prompt 10\"]
                 }";
 
                 // 2. Call Gemini API
@@ -200,26 +208,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_generate) {
                 // 3. Save to Database (Initial Draft)
                 $pdo->beginTransaction();
 
-                $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags) VALUES (?, ?, 'draft', ?, ?, ?)");
+                // Segmentation Logic (600-900 words)
+                $fullScript = $aiData['script'] ?? '';
+                $words = explode(' ', $fullScript);
+                $segments = [];
+                $currentSegment = [];
+                $wordCount = 0;
+                $segmentIndex = 1;
+
+                foreach ($words as $word) {
+                    $currentSegment[] = $word;
+                    $wordCount++;
+                    if ($wordCount >= 750) { // Aim for middle of 600-900
+                        $segments[] = "[SEGMENT $segmentIndex]\n" . implode(' ', $currentSegment);
+                        $currentSegment = [];
+                        $wordCount = 0;
+                        $segmentIndex++;
+                    }
+                }
+                if (!empty($currentSegment)) {
+                    $segments[] = "[SEGMENT $segmentIndex]\n" . implode(' ', $currentSegment);
+                }
+                $segmentsJson = json_encode($segments);
+
+                $stmt = $pdo->prepare("INSERT INTO videos (user_id, title, status, script, description, tags, video_type, segments_json) VALUES (?, ?, 'draft', ?, ?, ?, 'landscape', ?)");
                 $stmt->execute([
                     $user_id,
                     $aiData['title'] ?? $idea,
-                    $aiData['script'] ?? '',
+                    $fullScript,
                     $aiData['description'] ?? '',
-                    $aiData['tags'] ?? ''
+                    $aiData['tags'] ?? '',
+                    $segmentsJson
                 ]);
 
                 $video_id = $pdo->lastInsertId();
 
-                // 4. Generate and Save Images
-                $prompts = $aiData['image_prompts'] ?? ["Image related to $idea", "Another scene for $idea", "Final scene for $idea"];
-                $localImg1 = generateAndDownloadImage($prompts[0], $video_id, 1);
-                $localImg2 = generateAndDownloadImage($prompts[1], $video_id, 2);
-                $localImg3 = generateAndDownloadImage($prompts[2], $video_id, 3);
+                // 4. Generate and Save Images (Up to 10)
+                $prompts = $aiData['image_prompts'] ?? [];
+                $localImages = [];
+                for ($i = 0; $i < min(count($prompts), 10); $i++) {
+                    $localImages[] = generateAndDownloadImage($prompts[$i], $video_id, $i + 1);
+                }
 
-                // Update with image paths
-                $stmt_upd = $pdo->prepare("UPDATE videos SET image1 = ?, image2 = ?, image3 = ? WHERE id = ?");
-                $stmt_upd->execute([$localImg1, $localImg2, $localImg3, $video_id]);
+                // Update with image paths (storing in assets_json since we only had image1-3)
+                $stmt_upd = $pdo->prepare("UPDATE videos SET image1 = ?, image2 = ?, image3 = ?, assets_json = ? WHERE id = ?");
+                $stmt_upd->execute([
+                    $localImages[0] ?? '',
+                    $localImages[1] ?? '',
+                    $localImages[2] ?? '',
+                    json_encode($localImages),
+                    $video_id
+                ]);
 
                 $pdo->commit();
 

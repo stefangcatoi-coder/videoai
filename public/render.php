@@ -53,27 +53,24 @@ if (!$video || $video['status'] !== 'ready_for_render') {
     flush();
 
     // 2. Paths
-    $img1 = __DIR__ . "/" . $video['image1'];
-    $img2 = __DIR__ . "/" . $video['image2'];
-    $img3 = __DIR__ . "/" . $video['image3'];
     $audio = __DIR__ . "/" . $video['voiceover_path'];
+    $images = json_decode($video['assets_json'], true) ?: [$video['image1'], $video['image2'], $video['image3']];
+    $ass_path = "/dev/shm/video_" . $video_id . "/final.ass";
 
     // Verify files exist
-    if (!file_exists($img1) || !file_exists($img2) || !file_exists($img3) || !file_exists($audio)) {
-        echo "<p style='color: red;'>Eroare: Unele fișiere media lipsesc de pe disc.</p>";
+    if (!file_exists($audio)) {
+        echo "<p style='color: red;'>Eroare: Fișierul audio lipsește.</p>";
         exit;
     }
 
     // 3. Calculate Audio Duration
     $ffprobe_cmd = "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " . escapeshellarg($audio);
     $audio_duration = (float)shell_exec($ffprobe_cmd);
+    if (!$audio_duration) $audio_duration = 60.0;
 
-    if (!$audio_duration) {
-        $audio_duration = 30.0; // Fallback
-    }
-
-    $img_duration = $audio_duration / 3;
-    $zoompan_d = round($img_duration * 25); // frames at 25fps
+    $num_images = count($images);
+    $img_duration = $audio_duration / $num_images;
+    $zoompan_d = round($img_duration * 25);
 
     $output_filename = "video_" . $video_id . "_" . time() . ".mp4";
     $output_path = __DIR__ . "/uploads/videos/" . $output_filename;
@@ -83,23 +80,31 @@ if (!$video || $video['status'] !== 'ready_for_render') {
         mkdir(__DIR__ . "/uploads/videos/", 0775, true);
     }
 
-    // 4. FFmpeg Command
-    // - Vertical 1080x1920
-    // - Scale and Crop to handle 800x450 inputs
-    // - Zoompan effect synchronized with audio
+    // 4. FFmpeg Command (Landscape 1920x1080)
     $ffmpeg = "ffmpeg";
+    $input_images = "";
+    $filter_complex = "";
+    foreach ($images as $i => $img) {
+        $abs_img = __DIR__ . "/" . $img;
+        $input_images .= "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($abs_img) . " ";
+        $filter_complex .= "[$i:v]scale=1920:-1,crop=1920:1080,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080[v$i]; ";
+    }
     
-    $ffmpeg_cmd = "$ffmpeg -y " .
-        "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img1) . " " .
-        "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img2) . " " .
-        "-loop 1 -t " . $img_duration . " -i " . escapeshellarg($img3) . " " .
-        "-i " . escapeshellarg($audio) . " " .
-        "-filter_complex \"" .
-        "[0:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v1]; " .
-        "[1:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v2]; " .
-        "[2:v]scale=w=-1:h=1920,crop=1080:1920,zoompan=z='min(zoom+0.001,1.5)':d=$zoompan_d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v3]; " .
-        "[v1][v2][v3]concat=n=3:v=1:a=0[v]\" " .
-        "-map \"[v]\" -map 3:a -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path) . " 2>&1";
+    for ($i = 0; $i < $num_images; $i++) $filter_complex .= "[v$i]";
+    $filter_complex .= "concat=n=$num_images:v=1:a=0[vcat]; ";
+
+    // Add Subtitles
+    if (file_exists($ass_path)) {
+        // FFmpeg subtitles filter requires special path escaping
+        $escaped_ass = str_replace(":", "\\:", $ass_path);
+        $filter_complex .= "[vcat]subtitles=" . escapeshellarg($escaped_ass) . "[v]";
+    } else {
+        $filter_complex .= "[vcat]copy[v]";
+    }
+
+    $ffmpeg_cmd = "$ffmpeg -y $input_images -i " . escapeshellarg($audio) . " " .
+        "-filter_complex \"$filter_complex\" " .
+        "-map \"[v]\" -map $num_images:a -c:v libx264 -pix_fmt yuv420p -preset fast -c:a aac -b:a 192k -shortest " . escapeshellarg($output_path) . " 2>&1";
 
     exec($ffmpeg_cmd, $output, $return_var);
 

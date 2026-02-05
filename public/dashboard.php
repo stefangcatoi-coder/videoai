@@ -167,13 +167,13 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
             border: 1px solid #e0e0e0;
         }
 
-        .status-pending_production {
+        .status-pending_production, .status-ready_for_render {
             background-color: rgba(3, 218, 198, 0.2);
             color: #03dac6;
             border: 1px solid #03dac6;
         }
 
-        .status-pending {
+        .status-pending, .status-processing {
             background-color: rgba(255, 152, 0, 0.2);
             color: #ff9800;
             border: 1px solid #ff9800;
@@ -259,12 +259,12 @@ $progress_percent = ($user['monthly_limit'] > 0) ? ($user['videos_used'] / $user
                                 <td>
                                     <?php if ($video['status'] === 'draft'): ?>
                                         <span class="status-badge status-draft">Draft</span>
-                                    <?php elseif ($video['status'] === 'pending_production'): ?>
-                                        <span class="status-badge status-pending_production">În Producție</span>
-                                        <span class="ai-working">Slideshow-ul se creează...</span>
-                                    <?php elseif ($video['status'] === 'pending'): ?>
-                                        <span class="status-badge status-pending">Planificare AI</span>
-                                        <span class="ai-working">AI-ul lucrează...</span>
+                                    <?php elseif ($video['status'] === 'processing'): ?>
+                                        <span class="status-badge status-processing">Procesare AI</span>
+                                        <span class="ai-working">Generăm voce și subtitrări...</span>
+                                    <?php elseif ($video['status'] === 'ready_for_render'): ?>
+                                        <span class="status-badge status-ready_for_render">Gata de Randare</span>
+                                        <a href="render.php?id=<?php echo $video['id']; ?>" class="ai-working" style="color: #03dac6; text-decoration: underline;">Click pentru randare finală</a>
                                     <?php elseif ($video['status'] === 'done'): ?>
                                         <span class="status-badge status-done">Finalizat</span>
                                     <?php else: ?>
